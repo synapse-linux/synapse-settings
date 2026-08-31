@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/audio-default-receipt-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "direction", "device", "label", "changed", "stateAuthority", "requiresAcknowledgement", "applied"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-default-receipt/v1"},
+    "status": {"const": "Applied"},
+    "direction": {"enum": ["output", "input"]},
+    "device": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+    "label": {"type": "string", "maxLength": 255},
+    "changed": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-default/v1"},
+    "applied": {"const": true}
+  }
+}

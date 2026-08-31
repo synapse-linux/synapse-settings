@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/audio-inventory-v1.schema.json",
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "default", "volumePercent", "muted"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+        "label": {"type": "string", "maxLength": 255},
+        "default": {"type": "boolean"},
+        "volumePercent": {"type": "integer", "minimum": 0, "maximum": 999},
+        "muted": {"type": "boolean"}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "stateAuthority", "available", "reason", "mutationAvailable", "outputs", "inputs", "streams", "cards", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-inventory/v1"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "available": {"type": "boolean"},
+    "reason": {"type": ["string", "null"], "maxLength": 64},
+    "mutationAvailable": {"type": "boolean"},
+    "outputs": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/endpoint"}},
+    "inputs": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/endpoint"}},
+    "streams": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "direction", "label", "target", "volumePercent", "muted"],
+        "properties": {
+          "id": {"type": "string", "maxLength": 31},
+          "direction": {"enum": ["playback", "recording"]},
+          "label": {"type": "string", "maxLength": 255},
+          "target": {"type": "string", "maxLength": 31},
+          "volumePercent": {"type": "integer", "minimum": 0, "maximum": 999},
+          "muted": {"type": "boolean"}
+        }
+      }
+    },
+    "cards": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "activeProfile"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^card-[0-9a-f]{16}$"},
+          "label": {"type": "string", "maxLength": 255},
+          "activeProfile": {"type": "string", "maxLength": 255}
+        }
+      }
+    },
+    "bounded": {"const": true}
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/graphics-policy-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "generation", "defaultGpu", "rules"],
+  "properties": {
+    "schema": {"const": "synapse.settings.graphics-policy/v1"},
+    "generation": {"type": "integer", "minimum": 0},
+    "defaultGpu": {"type": "string", "pattern": "^(system|gpu-[0-9a-f]{16})$"},
+    "rules": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "match", "gpu", "enabled"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^rule-[0-9]{4,}$"},
+          "match": {
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "path"],
+            "properties": {
+              "type": {"enum": ["executable", "directory"]},
+              "path": {"type": "string", "pattern": "^/", "maxLength": 4096}
+            }
+          },
+          "gpu": {"type": "string", "pattern": "^(system|gpu-[0-9a-f]{16})$"},
+          "enabled": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

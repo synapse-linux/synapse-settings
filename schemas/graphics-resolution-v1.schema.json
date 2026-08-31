@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/graphics-resolution-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "selectedGpu", "source", "rule", "available", "strategy", "enforcementAvailable", "enforcementReason", "runningProcessMigration"],
+  "properties": {
+    "schema": {"const": "synapse.settings.graphics-resolution/v1"},
+    "selectedGpu": {"type": "string", "pattern": "^(system|gpu-[0-9a-f]{16})$"},
+    "source": {"enum": ["default", "rule"]},
+    "rule": {"type": ["string", "null"], "pattern": "^rule-[0-9]{4,}$"},
+    "available": {"type": "boolean"},
+    "strategy": {"enum": ["system-default", "mesa-dri-prime", "nvidia-prime-offload", "unsupported"]},
+    "enforcementAvailable": {"const": false},
+    "enforcementReason": {"const": "launch-broker-not-integrated"},
+    "runningProcessMigration": {"const": false}
+  }
+}

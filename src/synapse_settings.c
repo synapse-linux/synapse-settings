@@ -3,6 +3,8 @@
 
 #include <synapse/core.h>
 
+#include "settings_internal.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,10 +23,6 @@
 #ifndef SYNAPSE_SETTINGS_VERSION
 #define SYNAPSE_SETTINGS_VERSION "0.1.0-alpha.1"
 #endif
-
-#define SETTINGS_RECORD_LIMIT 65536U
-#define SETTINGS_FIELD_LIMIT 4096U
-#define SETTINGS_LINE_LIMIT (64U * 1024U)
 
 typedef struct {
     char *id;
@@ -354,12 +352,12 @@ static size_t layer_package_count(const layer_package_list *packages, const char
 }
 
 static int build_unlayered(const package_list *installed, package_list *layered, package_list *unlayered) {
-    qsort(layered->items, layered->count, sizeof(*layered->items), package_compare);
+    if (layered->count > 1U) qsort(layered->items, layered->count, sizeof(*layered->items), package_compare);
     for (size_t i = 0; i < installed->count; i++) {
         if (!package_present(layered, installed->items[i].name)
             && push_package(unlayered, installed->items[i].name, installed->items[i].version) != 0) return -1;
     }
-    qsort(unlayered->items, unlayered->count, sizeof(*unlayered->items), package_compare);
+    if (unlayered->count > 1U) qsort(unlayered->items, unlayered->count, sizeof(*unlayered->items), package_compare);
     return 0;
 }
 
@@ -555,6 +553,15 @@ static void usage(FILE *out) {
     fputs("Usage:\n"
           "  synapse-settings sections [--format text|json]\n"
           "  synapse-settings layers [--format text|json]\n"
+          "  synapse-settings audio inventory [--format text|json]\n"
+          "  synapse-settings audio plan-default --direction output|input --device ID [--format text|json]\n"
+          "  synapse-settings audio set-default --direction output|input --device ID --ack synapse-settings/audio-default/v1 [--format text|json]\n"
+          "  synapse-settings graphics inventory [--format text|json]\n"
+          "  synapse-settings graphics policy show [--format text|json]\n"
+          "  synapse-settings graphics policy set-default --gpu ID|system --ack synapse-settings/graphics-policy/v1 [--format text|json]\n"
+          "  synapse-settings graphics policy add-rule --match executable|directory --path PATH --gpu ID|system --ack synapse-settings/graphics-policy/v1 [--format text|json]\n"
+          "  synapse-settings graphics policy remove-rule --rule ID --ack synapse-settings/graphics-policy/v1 [--format text|json]\n"
+          "  synapse-settings graphics resolve --path PATH [--format text|json]\n"
           "  synapse-settings --version\n", out);
 }
 
@@ -567,6 +574,9 @@ int main(int argc, char **argv) {
         usage(argc < 2 ? stderr : stdout);
         return argc < 2 ? 2 : 0;
     }
+    if (strcmp(argv[1], "audio") == 0) return settings_audio_command(argc - 1, argv + 1);
+    if (strcmp(argv[1], "graphics") == 0) return settings_graphics_command(argc - 1, argv + 1);
+
     const char *format = "text";
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--format") == 0 && i + 1 < argc) format = argv[++i];
@@ -579,8 +589,8 @@ int main(int argc, char **argv) {
     }
     int json = strcmp(format, "json") == 0;
     if (strcmp(argv[1], "sections") == 0) {
-        if (json) puts("{\"schema\":\"synapse.settings.sections/v1\",\"sections\":[{\"id\":\"layers\",\"title\":\"Layers\",\"icon\":\"layers\",\"available\":true},{\"id\":\"input\",\"title\":\"Input\",\"icon\":\"input-keyboard\",\"available\":true},{\"id\":\"themes\",\"title\":\"Template\",\"icon\":\"preferences-desktop-wallpaper\",\"available\":true}]}");
-        else puts("layers\tLayers\tlayers\tavailable\ninput\tInput\tinput-keyboard\tavailable\nthemes\tTemplate\tpreferences-desktop-wallpaper\tavailable");
+        if (json) puts("{\"schema\":\"synapse.settings.sections/v2\",\"sections\":[{\"id\":\"layers\",\"title\":\"Layers\",\"icon\":\"layers\",\"available\":true,\"lazy\":true},{\"id\":\"audio\",\"title\":\"Audio\",\"icon\":\"audio-card\",\"available\":true,\"lazy\":true},{\"id\":\"graphics\",\"title\":\"Grafica\",\"icon\":\"video-display\",\"available\":true,\"lazy\":true},{\"id\":\"input\",\"title\":\"Input\",\"icon\":\"input-keyboard\",\"available\":true,\"lazy\":true},{\"id\":\"themes\",\"title\":\"Template\",\"icon\":\"preferences-desktop-wallpaper\",\"available\":true,\"lazy\":true}]}");
+        else puts("layers\tLayers\tlayers\tavailable\naudio\tAudio\taudio-card\tavailable\ngraphics\tGrafica\tvideo-display\tavailable\ninput\tInput\tinput-keyboard\tavailable\nthemes\tTemplate\tpreferences-desktop-wallpaper\tavailable");
         return 0;
     }
     if (strcmp(argv[1], "layers") != 0) { usage(stderr); return 2; }

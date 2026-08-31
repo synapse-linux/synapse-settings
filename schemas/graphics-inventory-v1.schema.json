@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/graphics-inventory-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "gpus", "gpuCount", "policyAvailable", "launchBrokerAvailable", "runningProcessMigration"],
+  "properties": {
+    "schema": {"const": "synapse.settings.graphics-inventory/v1"},
+    "gpus": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "vendorId", "deviceId", "driver", "displayOwner", "gamingCandidate", "renderNodeAvailable", "strategy"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^gpu-[0-9a-f]{16}$"},
+          "label": {"type": "string", "maxLength": 127},
+          "vendorId": {"type": "string", "pattern": "^0x[0-9a-fA-F]{4}$"},
+          "deviceId": {"type": "string", "pattern": "^0x[0-9a-fA-F]{4}$"},
+          "driver": {"type": "string", "maxLength": 63},
+          "displayOwner": {"type": "boolean"},
+          "gamingCandidate": {"type": "boolean"},
+          "renderNodeAvailable": {"type": "boolean"},
+          "strategy": {"enum": ["mesa-dri-prime", "nvidia-prime-offload", "unsupported"]}
+        }
+      }
+    },
+    "gpuCount": {"type": "integer", "minimum": 0, "maximum": 32},
+    "policyAvailable": {"const": true},
+    "launchBrokerAvailable": {"const": false},
+    "runningProcessMigration": {"const": false}
+  }
+}

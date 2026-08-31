@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.local/schemas/settings/graphics-policy-receipt-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "action", "generation", "changed", "gpu", "rule", "enforcementAvailable", "enforcementReason"],
+  "properties": {
+    "schema": {"const": "synapse.settings.graphics-policy-receipt/v1"},
+    "status": {"const": "Applied"},
+    "action": {"enum": ["set-default", "add-rule", "remove-rule"]},
+    "generation": {"type": "integer", "minimum": 0},
+    "changed": {"type": "boolean"},
+    "gpu": {"type": ["string", "null"], "pattern": "^(system|gpu-[0-9a-f]{16})$"},
+    "rule": {"type": ["string", "null"], "pattern": "^rule-[0-9]{4,}$"},
+    "enforcementAvailable": {"const": false},
+    "enforcementReason": {"const": "launch-broker-not-integrated"}
+  }
+}
