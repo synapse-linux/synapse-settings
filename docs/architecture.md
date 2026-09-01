@@ -31,8 +31,8 @@ a bounded response and a bounded timeout. It never invokes a shell.
 
 Every JSON object is decoded into an exact expected field set. Arrays, text,
 identities and integer ranges are bounded; duplicate endpoint, stream, card and
-rule identities fail closed. Models publish only after both inventory and route
-policy pass validation.
+rule identities fail closed. Models publish only after inventory, route policy
+and the separate broker runtime status all pass validation.
 
 A GUI default-device transaction is:
 
@@ -84,6 +84,32 @@ fixed `move-sink-input` or `move-source-output` argv is issued only for an
 explicit exact-executable or directory-prefix rule with both current and target
 endpoints available. System-default resolution performs no move.
 
+## Broker runtime status boundary
+
+Alpha 5 exposes runtime state through one status-only AF_UNIX socket at
+`$XDG_RUNTIME_DIR/synapse/audio-route-broker-v1.sock`. The broker creates or
+accepts only an owner-mode-0700 `synapse` directory, serializes instances with an
+owner-mode-0600 advisory lock, and publishes the socket at mode 0600 only after
+subscriber startup, baseline capture and policy validation complete. A second
+broker fails without unlinking the active socket. Shutdown removes the socket;
+a crash leaves at most an unreachable stale socket, which clients classify as
+inactive.
+
+The protocol accepts exactly `status-v1` followed by one newline. It has no
+mutation, configuration or stream-selection request. The broker checks
+`SO_PEERCRED` for the same UID, serves one bounded response per connection and
+bounds accept-side read/write time. The C11 `audio broker-status` client verifies
+the runtime directory and socket type, owner and exact modes, checks the
+connected server UID with `SO_PEERCRED`, uses bounded nonblocking
+connect/send/receive, and strictly parses a canonical status object.
+Malformed, oversized, stalled, loose-mode, symlinked or unreachable state cannot
+produce an active or enforcement-available projection.
+
+The Qt adapter invokes only the fixed C11 status command after inventory and
+policy. It revalidates the exact contract and exposes booleans plus a bounded
+typed reason identifier. QML sees neither the socket path nor IPC frames and
+cannot query or control the broker directly.
+
 A receipt reports `routingApplied=true` only when the command succeeds and a
 fresh postflight proves the same process instance on the selected opaque target.
 A command that reports failure after reaching the target is compensated to the
@@ -92,9 +118,10 @@ changed identities, unavailable targets, timeout and unverifiable state never
 produce a success claim. Receipts contain no PID, executable path, raw endpoint
 or subscriber text.
 
-The service unit restricts address families to AF_UNIX and applies user-service
-hardening, but installation, enablement, startup and live qualification remain
-separate gates. Existing-stream movement is absent. Policy view/receipt v1 still
-reports `audio-route-broker-not-integrated` because it describes the currently
-inactive Settings runtime, not source capability; runtime status integration
-requires a versioned follow-up contract.
+The service unit restricts address families to AF_UNIX, requests a private
+runtime directory and applies user-service hardening, but installation,
+enablement, startup and live qualification remain separate gates.
+Existing-stream movement is absent. Policy view/receipt v1 still reports
+`audio-route-broker-not-integrated` because a policy write cannot prove runtime
+activity or a stream move. The separate broker-status contract is the sole
+runtime authority presented by Settings.

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0-alpha.1
+
+- Add an owner-private, status-only AF_UNIX channel under
+  `$XDG_RUNTIME_DIR/synapse` for the separate Audio route broker.
+- Serialize broker startup with an owner-mode-0600 advisory lock and reject a
+  concurrent broker without touching the active status socket.
+- Verify runtime directory, socket type, owner and exact modes; bound connect,
+  request, response and peer handling; require same-UID clients.
+- Add `synapse-settings audio broker-status` as the authoritative C11 read-only
+  client with strict canonical response validation.
+- Extend the Qt adapter with an exact broker-status decoder and publish only
+  typed available, active, reason and enforcement projections to QML.
+- Present Active, Inactive and Unavailable new-stream broker states while always
+  stating that existing streams are not moved.
+- Reject stale, malformed, oversized, stalled, symlinked and loose-mode runtime
+  states without enabling enforcement.
+- Keep the service source disabled and perform no installation, activation or
+  live Audio mutation.
+
 ## 0.4.0-alpha.1
 
 - Add a separate first-party C11 Audio route broker for post-baseline new

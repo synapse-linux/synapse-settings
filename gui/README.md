@@ -9,7 +9,8 @@ The adapter implements these properties:
 
 - `audioBusy`, `audioAvailable`, `audioReason`;
 - `audioOutputs`, `audioInputs`, `audioStreams`, `audioCards`;
-- `audioRouteRules`, `audioRouteEnforcementAvailable`;
+- `audioRouteRules`, `audioRouteBrokerAvailable`, `audioRouteBrokerActive`,
+  `audioRouteBrokerReason`, `audioRouteEnforcementAvailable`;
 - `audioProcessChoices`, `audioProcessChoiceOpen`;
 - `audioStatusId`, `audioErrorId`.
 
@@ -30,7 +31,8 @@ opaque stream token; the C backend privately maps the selected same-UID process
 to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
-and republishes only a complete inventory-plus-policy cohort. Policy persistence
-still does not imply stream movement. The separate Alpha 4 C11 broker owns
-new-stream observation and enforcement, but service activation and typed runtime
-status integration are not part of the GUI candidate.
+and republishes only a complete inventory-plus-policy-plus-broker-status cohort.
+Policy persistence still does not imply stream movement. The separate C11 broker
+owns new-stream observation and enforcement. The adapter obtains only typed,
+read-only runtime status through the C11 CLI; QML maps it to Active, Inactive or
+Unavailable presentation and cannot start, stop or configure the service.

@@ -6,7 +6,7 @@ BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 BUILD_DIR ?= build
-VERSION := 0.4.0-alpha.1
+VERSION := 0.5.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -66,8 +66,9 @@ else
 GUI_ENABLED := $(GUI_DEPS_AVAILABLE)
 endif
 
-SOURCES := src/synapse_settings.c src/audio.c src/audio_policy.c
-BROKER_SOURCES := src/audio_broker.c src/audio.c src/audio_policy.c
+AUDIO_SOURCES := src/audio.c src/audio_policy.c src/audio_broker_status.c
+SOURCES := src/synapse_settings.c $(AUDIO_SOURCES)
+BROKER_SOURCES := src/audio_broker.c $(AUDIO_SOURCES)
 BINARY := $(BUILD_DIR)/synapse-settings
 TEST_BINARY := $(BUILD_DIR)/synapse-settings-test
 BROKER_BINARY := $(BUILD_DIR)/synapse-audio-route-broker

@@ -90,8 +90,24 @@ assert [x['id'] for x in value['sections']]==['layers','audio','input','themes']
 assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections'])
 PY
 "$binary" sections --format text | grep -Fq $'audio\tAudio\taudio-card\tavailable'
-[[ $($binary --version) == 'synapse-settings 0.4.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 0.5.0-alpha.1' ]]
 "$binary" --help | grep -Fq 'synapse-settings audio policy set-rule'
+
+# Broker-status observation is independently read-only when no broker or policy
+# exists: it creates neither configuration nor runtime state and runs no pactl.
+install -d -m 0700 "$work/status-home" "$work/status-runtime"
+env HOME="$work/status-home" XDG_CONFIG_HOME="$work/status-home/config" \
+  XDG_RUNTIME_DIR="$work/status-runtime" SYNAPSE_PACTL="$work/missing-pactl" \
+  "$binary" audio broker-status --format json >"$work/status-inactive.json"
+python - "$work/status-inactive.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert value['schema']=='synapse.settings.audio-route-broker-status/v1'
+assert value['status']=='Ready' and value['capable'] and not value['active']
+assert not value['enforcementAvailable'] and value['reason']=='broker-not-running'
+assert value['policyGeneration']==0 and value['baselineStreams']==0
+PY
+[[ ! -e "$work/status-home/config" && ! -e "$work/status-runtime/synapse" ]]
 
 start=$(date +%s)
 env SYNAPSE_COMPOSITION_DIR="$composition" SYNAPSE_PACMAN_LOCAL="$pacman" \
@@ -464,6 +480,7 @@ root=Path(sys.argv[1]);work=Path(sys.argv[2]);policy=Path(sys.argv[3])
 pairs=[
  ('sections-v2.schema.json','sections-final.json'),
  ('audio-inventory-v1.schema.json','audio-inventory.json'),
+ ('audio-route-broker-status-v1.schema.json','status-inactive.json'),
  ('audio-default-plan-v1.schema.json','audio-plan.json'),
  ('audio-default-receipt-v1.schema.json','audio-receipt.json'),
  ('audio-route-policy-view-v1.schema.json','route-view.json'),

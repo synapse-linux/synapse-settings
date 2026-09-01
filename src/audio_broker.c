@@ -19,10 +19,10 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.4.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.5.0-alpha.1"
 #endif
 
-#define BROKER_STREAM_LIMIT 128U
+#define BROKER_STREAM_LIMIT SETTINGS_AUDIO_BROKER_STREAM_LIMIT
 #define BROKER_EVENT_LINE_LIMIT 511U
 
 static volatile sig_atomic_t stop_requested;
@@ -60,37 +60,16 @@ static int install_signal_handlers(void) {
   return 0;
 }
 
-static void print_status_json(const char *status, int active,
-                              const char *reason, unsigned generation,
-                              size_t baseline_count) {
-  json_object *root = json_object_new_object();
-  json_object_object_add(
-      root, "schema",
-      json_object_new_string("synapse.settings.audio-route-broker-status/v1"));
-  json_object_object_add(root, "status", json_object_new_string(status));
-  json_object_object_add(root, "mode",
-                         json_object_new_string("new-streams-only"));
-  json_object_object_add(root, "stateAuthority",
-                         json_object_new_string("pipewire-pulse-model"));
-  json_object_object_add(root, "capable", json_object_new_boolean(1));
-  json_object_object_add(root, "active", json_object_new_boolean(active));
-  json_object_object_add(root, "enforcementAvailable",
-                         json_object_new_boolean(active));
-  json_object_object_add(root, "reason",
-                         reason ? json_object_new_string(reason)
-                                : json_object_new_null());
-  json_object_object_add(root, "policyGeneration",
-                         json_object_new_int64(generation));
-  json_object_object_add(root, "baselineStreams",
-                         json_object_new_int64((int64_t)baseline_count));
-  json_object_object_add(root, "persistentPidRules",
-                         json_object_new_boolean(0));
-  json_object_object_add(root, "existingStreamMigration",
-                         json_object_new_boolean(0));
-  json_object_object_add(root, "bounded", json_object_new_boolean(1));
-  puts(json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
-  fflush(stdout);
-  json_object_put(root);
+static void emit_status(int active, const char *reason, unsigned generation,
+                        size_t baseline_count) {
+  settings_audio_broker_status status;
+  if (reason)
+    settings_audio_broker_status_unavailable(&status, reason, generation,
+                                             baseline_count);
+  else
+    settings_audio_broker_status_ready(&status, active, generation,
+                                       baseline_count);
+  (void)settings_audio_broker_status_print(&status, "json");
 }
 
 static void print_receipt(const settings_audio_broker_receipt *receipt) {
@@ -282,6 +261,15 @@ static int parse_event(const char *line, int *is_new, int *is_remove,
 }
 
 static int probe_broker(const char *format) {
+  settings_audio_broker_status runtime_status;
+  if (settings_audio_broker_status_query(&runtime_status) != 0)
+    return 1;
+  if (runtime_status.active ||
+      strcmp(runtime_status.status, "Unavailable") == 0) {
+    (void)settings_audio_broker_status_print(&runtime_status, format);
+    return runtime_status.active ? 0 : 1;
+  }
+
   char streams[BROKER_STREAM_LIMIT][32];
   size_t stream_count = 0;
   const char *reason = NULL;
@@ -289,76 +277,96 @@ static int probe_broker(const char *format) {
   int present = 0;
   if (settings_audio_broker_stream_ids(streams, BROKER_STREAM_LIMIT,
                                        &stream_count, &reason) != 0) {
-    if (strcmp(format, "json") == 0)
-      print_status_json("Unavailable", 0, reason ? reason : "audio-unavailable",
-                        0, 0);
-    else
-      printf("Audio route broker unavailable: %s\n",
-             reason ? reason : "audio-unavailable");
+    settings_audio_broker_status_unavailable(
+        &runtime_status, reason ? reason : "audio-unavailable", 0, 0);
+    (void)settings_audio_broker_status_print(&runtime_status, format);
     return 1;
   }
   if (settings_audio_route_policy_state(&generation, &present) != 0) {
-    if (strcmp(format, "json") == 0)
-      print_status_json("Unavailable", 0, "policy-unavailable", 0,
-                        stream_count);
-    else
-      puts("Audio route broker unavailable: policy-unavailable");
+    settings_audio_broker_status_unavailable(
+        &runtime_status, "policy-unavailable", 0, stream_count);
+    (void)settings_audio_broker_status_print(&runtime_status, format);
     return 1;
   }
   (void)present;
-  if (strcmp(format, "json") == 0)
-    print_status_json("Ready", 0, "broker-not-running", generation,
-                      stream_count);
-  else
-    printf("Audio route broker capable, inactive; baseline streams: %zu; "
-           "policy generation: %u\n",
-           stream_count, generation);
+  settings_audio_broker_status_ready(&runtime_status, 0, generation,
+                                     stream_count);
+  (void)settings_audio_broker_status_print(&runtime_status, format);
   return 0;
 }
 
 static int run_broker(size_t test_event_limit) {
   if (install_signal_handlers() != 0)
     return 1;
+  settings_audio_broker_runtime runtime;
+  const char *reason = NULL;
+  if (settings_audio_broker_runtime_acquire(&runtime, &reason) != 0) {
+    emit_status(0, reason ? reason : "runtime-unavailable", 0, 0);
+    return 1;
+  }
   int subscriber_fd = -1;
   pid_t subscriber = start_subscriber(&subscriber_fd);
   if (subscriber < 0) {
-    print_status_json("Unavailable", 0, "subscriber-unavailable", 0, 0);
+    emit_status(0, "subscriber-unavailable", 0, 0);
+    settings_audio_broker_runtime_release(&runtime);
     return 1;
   }
   char tracked[BROKER_STREAM_LIMIT][32];
   size_t tracked_count = 0;
-  const char *reason = NULL;
   if (settings_audio_broker_stream_ids(tracked, BROKER_STREAM_LIMIT,
                                        &tracked_count, &reason) != 0) {
-    print_status_json("Unavailable", 0, reason ? reason : "audio-unavailable",
-                      0, 0);
+    emit_status(0, reason ? reason : "audio-unavailable", 0, 0);
+    settings_audio_broker_runtime_release(&runtime);
     stop_subscriber(subscriber, subscriber_fd);
     return 1;
   }
+  const size_t baseline_count = tracked_count;
   unsigned generation = 0;
   int present = 0;
   if (settings_audio_route_policy_state(&generation, &present) != 0) {
-    print_status_json("Unavailable", 0, "policy-unavailable", 0, tracked_count);
+    emit_status(0, "policy-unavailable", 0, baseline_count);
+    settings_audio_broker_runtime_release(&runtime);
     stop_subscriber(subscriber, subscriber_fd);
     return 1;
   }
   (void)present;
-  print_status_json("Ready", 1, NULL, generation, tracked_count);
+  if (settings_audio_broker_runtime_listen(&runtime, &reason) != 0) {
+    emit_status(0, reason ? reason : "runtime-state-invalid", generation,
+                baseline_count);
+    settings_audio_broker_runtime_release(&runtime);
+    stop_subscriber(subscriber, subscriber_fd);
+    return 1;
+  }
+  emit_status(1, NULL, generation, baseline_count);
 
   char line[BROKER_EVENT_LINE_LIMIT + 1U] = {0};
   size_t line_used = 0;
   size_t processed = 0;
   int result = 1;
   while (!stop_requested) {
-    struct pollfd descriptor = {subscriber_fd, POLLIN | POLLHUP, 0};
-    int ready = poll(&descriptor, 1, 250);
+    struct pollfd descriptors[2] = {
+        {subscriber_fd, POLLIN | POLLHUP, 0},
+        {settings_audio_broker_runtime_fd(&runtime), POLLIN, 0},
+    };
+    int ready = poll(descriptors, 2, 250);
     if (ready < 0 && errno == EINTR)
       continue;
     if (ready < 0)
       break;
     if (ready == 0)
       continue;
-    if (!(descriptor.revents & (POLLIN | POLLHUP | POLLERR)))
+    if (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      emit_status(0, "runtime-state-invalid", generation, baseline_count);
+      goto done;
+    }
+    if (descriptors[1].revents & POLLIN) {
+      if (settings_audio_broker_runtime_serve(&runtime, generation,
+                                              baseline_count) != 0) {
+        emit_status(0, "runtime-state-invalid", generation, baseline_count);
+        goto done;
+      }
+    }
+    if (!(descriptors[0].revents & (POLLIN | POLLHUP | POLLERR)))
       continue;
     char chunk[256];
     ssize_t count = read(subscriber_fd, chunk, sizeof(chunk));
@@ -378,8 +386,8 @@ static int run_broker(size_t test_event_limit) {
                                  sizeof(stream_id));
         line_used = 0;
         if (parsed < 0) {
-          print_status_json("Unavailable", 0, "invalid-subscriber-event",
-                            generation, tracked_count);
+          emit_status(0, "invalid-subscriber-event", generation,
+                      baseline_count);
           goto done;
         }
         if (parsed > 0 && is_remove)
@@ -387,14 +395,12 @@ static int run_broker(size_t test_event_limit) {
         if (parsed > 0 && is_new &&
             tracked_find(tracked, tracked_count, stream_id) < 0) {
           if (tracked_add(tracked, &tracked_count, stream_id) != 0) {
-            print_status_json("Unavailable", 0, "stream-limit", generation,
-                              tracked_count);
+            emit_status(0, "stream-limit", generation, baseline_count);
             goto done;
           }
           settings_audio_broker_receipt receipt;
           if (settings_audio_broker_apply_new(stream_id, &receipt) != 0) {
-            print_status_json("Unavailable", 0, "broker-internal-error",
-                              generation, tracked_count);
+            emit_status(0, "broker-internal-error", generation, baseline_count);
             goto done;
           }
           print_receipt(&receipt);
@@ -410,8 +416,7 @@ static int run_broker(size_t test_event_limit) {
       }
       if (byte < 0x20U || byte == 0x7fU ||
           line_used >= BROKER_EVENT_LINE_LIMIT) {
-        print_status_json("Unavailable", 0, "invalid-subscriber-event",
-                          generation, tracked_count);
+        emit_status(0, "invalid-subscriber-event", generation, baseline_count);
         goto done;
       }
       line[line_used++] = (char)byte;
@@ -420,10 +425,10 @@ static int run_broker(size_t test_event_limit) {
   if (stop_requested)
     result = 0;
   else
-    print_status_json("Unavailable", 0, "subscriber-ended", generation,
-                      tracked_count);
+    emit_status(0, "subscriber-ended", generation, baseline_count);
 
 done:
+  settings_audio_broker_runtime_release(&runtime);
   stop_subscriber(subscriber, subscriber_fd);
   return result;
 }

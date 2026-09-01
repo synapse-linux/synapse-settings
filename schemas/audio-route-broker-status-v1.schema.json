@@ -16,7 +16,7 @@
     "reason": {
       "oneOf": [
         {"type": "null"},
-        {"enum": ["broker-not-running", "audio-unavailable", "unavailable", "timeout", "invalid-response", "stream-limit", "policy-unavailable", "subscriber-unavailable", "subscriber-ended", "invalid-subscriber-event", "broker-internal-error"]}
+        {"enum": ["broker-not-running", "audio-unavailable", "unavailable", "timeout", "invalid-response", "stream-limit", "policy-unavailable", "subscriber-unavailable", "subscriber-ended", "invalid-subscriber-event", "broker-internal-error", "runtime-unavailable", "runtime-state-invalid", "broker-already-running"]}
       ]
     },
     "policyGeneration": {"type": "integer", "minimum": 0, "maximum": 4294967295},
@@ -43,7 +43,7 @@
     },
     {
       "if": {"properties": {"status": {"const": "Unavailable"}}, "required": ["status"]},
-      "then": {"properties": {"active": {"const": false}, "reason": {"type": "string"}}}
+      "then": {"properties": {"active": {"const": false}, "reason": {"type": "string", "not": {"const": "broker-not-running"}}}}
     }
   ]
 }

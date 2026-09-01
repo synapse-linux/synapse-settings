@@ -44,6 +44,27 @@ process and PipeWire metadata. Existing-stream migration is explicitly false.
 systemd user service. Test event limits and executable overrides are absent from
 the production binary.
 
+## Alpha 5 read-only runtime status
+
+The foreground broker serves one fixed `status-v1` request over an owner-mode-
+0600 AF_UNIX socket in `$XDG_RUNTIME_DIR/synapse`, which must itself be an owner-
+mode-0700 real directory. It verifies same-UID peers and exposes no operation for
+starting, stopping, configuring or mutating Audio. Request and response size,
+connect/read/write duration and accepted-client work are bounded. A mode-0600
+lock prevents concurrent brokers from replacing one another's sockets.
+
+`synapse-settings audio broker-status` is the C11 client and decoder. It returns
+the same versioned contract for a valid live broker and deterministic inactive
+or unavailable status for absence, stale sockets, crashes, timeouts, unsafe
+ownership or modes, malformed responses and oversized frames. These failures
+never set `active` or `enforcementAvailable`.
+
+The Qt adapter queries this status only after a complete inventory and policy
+cohort. It publishes `available`, `active`, `enforcementAvailable` and a bounded
+reason identifier. QML maps those typed values to presentation text and receives
+no PID, executable path, raw endpoint, socket path, IPC frame, argv, environment
+or acknowledgement.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -68,17 +89,19 @@ output rules for the same application.
 
 ## Enforcement status
 
-Alpha 4 provides a typed new-stream broker source and fixture-qualified engine,
-but it is not installed, active or integrated into the deployed Settings status.
-Policy view, policy receipt and resolution v1 therefore continue to report
-`audio-route-broker-not-integrated` and `enforcementAvailable=false`. A policy
-receipt means only that the private policy was atomically stored and still
-reports `routingApplied=false`.
+Alpha 5 integrates the fixture-qualified broker's typed runtime state into the
+standalone Settings candidate without installing or activating the service.
+Policy view, policy receipt and resolution v1 continue to report
+`audio-route-broker-not-integrated` and `enforcementAvailable=false` because a
+stored policy is not runtime evidence. A policy receipt means only that the
+private policy was atomically stored and still reports `routingApplied=false`.
+The separate broker-status contract is authoritative for current activity and
+new-stream enforcement availability.
 
-Only the separate broker event receipt can report a move, and only after verified
+Only a separate broker event receipt can report a move, and only after verified
 postflight. Existing-stream migration remains unavailable and requires a future
 independent acknowledgement and rollback contract. QML never subscribes to
-PipeWire or constructs raw `pactl` operations.
+PipeWire, opens the runtime socket or constructs raw `pactl` operations.
 
 ## Remaining Audio work
 

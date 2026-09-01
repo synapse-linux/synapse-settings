@@ -18,6 +18,9 @@ struct AudioPresentationSnapshot {
   QVariantList streams;
   QVariantList cards;
   QVariantList routeRules;
+  bool routeBrokerAvailable = false;
+  bool routeBrokerActive = false;
+  QString routeBrokerReason;
   bool routeEnforcementAvailable = false;
 };
 
@@ -27,6 +30,8 @@ bool decodeInventory(const QByteArray &payload,
                      AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodePolicy(const QByteArray &payload,
                   AudioPresentationSnapshot *snapshot, QString *errorId);
+bool decodeBrokerStatus(const QByteArray &payload,
+                        AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodeDefaultPlan(const QByteArray &payload,
                        const QString &expectedDirection,
                        const QString &expectedDevice, bool *changed,
@@ -57,6 +62,12 @@ class AudioAdapter final : public QObject {
   Q_PROPERTY(QVariantList audioCards READ audioCards NOTIFY audioModelsChanged)
   Q_PROPERTY(QVariantList audioRouteRules READ audioRouteRules NOTIFY
                  audioModelsChanged)
+  Q_PROPERTY(bool audioRouteBrokerAvailable READ audioRouteBrokerAvailable
+                 NOTIFY audioModelsChanged)
+  Q_PROPERTY(bool audioRouteBrokerActive READ audioRouteBrokerActive NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(QString audioRouteBrokerReason READ audioRouteBrokerReason NOTIFY
+                 audioModelsChanged)
   Q_PROPERTY(bool audioRouteEnforcementAvailable READ
                  audioRouteEnforcementAvailable NOTIFY audioModelsChanged)
   Q_PROPERTY(QVariantList audioProcessChoices READ audioProcessChoices NOTIFY
@@ -84,6 +95,9 @@ public:
   QVariantList audioStreams() const;
   QVariantList audioCards() const;
   QVariantList audioRouteRules() const;
+  bool audioRouteBrokerAvailable() const;
+  bool audioRouteBrokerActive() const;
+  QString audioRouteBrokerReason() const;
   bool audioRouteEnforcementAvailable() const;
   QVariantList audioProcessChoices() const;
   bool audioProcessChoiceOpen() const;
@@ -122,6 +136,8 @@ private:
   void startInventoryLoad(const QString &successStatusId);
   void startPolicyLoad(AudioPresentationSnapshot snapshot,
                        const QString &successStatusId);
+  void startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
+                             const QString &successStatusId);
   void publishSnapshot(AudioPresentationSnapshot snapshot,
                        const QString &successStatusId);
   void failLoad(const QString &errorId);

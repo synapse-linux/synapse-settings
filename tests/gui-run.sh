@@ -7,6 +7,7 @@ backend=${2:?test backend required}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 install -d -m 0755 "$work/stage" "$work/audio" "$work/config"
+install -d -m 0700 "$work/runtime"
 install -m 0755 "$gui" "$work/stage/synapse-settings-gui"
 install -m 0755 "$backend" "$work/stage/synapse-settings"
 cat >"$work/audio/sinks.json" <<'JSON'
@@ -40,7 +41,7 @@ chmod 755 "$work/pactl-fake"
 for locale in en_US it_IT; do
   screenshot="$work/$locale.png"
   env QT_QPA_PLATFORM=offscreen HOME="$work" XDG_CONFIG_HOME="$work/config" \
-    SYNAPSE_PACTL="$work/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$work/audio" \
+    XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_PACTL="$work/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$work/audio" \
     SYNAPSE_AUDIO_ROUTE_POLICY="$work/config/audio-route-policy-v1.json" \
     "$work/stage/synapse-settings-gui" --locale "$locale" \
       --test-exit-after-load --test-ready-timeout 10000 \

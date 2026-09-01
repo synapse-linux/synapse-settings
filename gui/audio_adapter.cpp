@@ -20,6 +20,7 @@ namespace {
 
 constexpr qsizetype kMaximumInventoryBytes = qsizetype{1024} * 1024;
 constexpr qsizetype kMaximumPolicyBytes = qsizetype{128} * 1024;
+constexpr qsizetype kMaximumBrokerStatusBytes = 4096;
 constexpr qsizetype kMaximumReceiptBytes = qsizetype{64} * 1024;
 constexpr qsizetype kMaximumErrorBytes = qsizetype{16} * 1024;
 constexpr int kMaximumLabelBytes = 255;
@@ -133,6 +134,26 @@ const QRegularExpression &streamTokenExpression() {
   static const QRegularExpression value(
       QStringLiteral("^(playback|recording)-(0|[1-9][0-9]{0,9})$"));
   return value;
+}
+
+const QSet<QString> &brokerReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("broker-not-running"),
+      QStringLiteral("audio-unavailable"),
+      QStringLiteral("unavailable"),
+      QStringLiteral("timeout"),
+      QStringLiteral("invalid-response"),
+      QStringLiteral("stream-limit"),
+      QStringLiteral("policy-unavailable"),
+      QStringLiteral("subscriber-unavailable"),
+      QStringLiteral("subscriber-ended"),
+      QStringLiteral("invalid-subscriber-event"),
+      QStringLiteral("broker-internal-error"),
+      QStringLiteral("runtime-unavailable"),
+      QStringLiteral("runtime-state-invalid"),
+      QStringLiteral("broker-already-running"),
+  };
+  return values;
 }
 
 bool endpointToken(const QString &direction, const QString &device) {
@@ -514,6 +535,76 @@ bool decodePolicy(const QByteArray &payload,
   return true;
 }
 
+bool decodeBrokerStatus(const QByteArray &payload,
+                        AudioPresentationSnapshot *snapshot, QString *errorId) {
+  if (!snapshot)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumBrokerStatusBytes, &object, errorId))
+    return false;
+  if (!exactKeys(object,
+                 {"schema", "status", "mode", "stateAuthority", "capable",
+                  "active", "enforcementAvailable", "reason",
+                  "policyGeneration", "baselineStreams", "persistentPidRules",
+                  "existingStreamMigration", "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral("synapse.settings.audio-route-broker-status/v1") ||
+      object.value(QStringLiteral("mode")).toString() !=
+          QStringLiteral("new-streams-only") ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("pipewire-pulse-model") ||
+      !object.value(QStringLiteral("capable")).isBool() ||
+      !object.value(QStringLiteral("capable")).toBool() ||
+      !object.value(QStringLiteral("active")).isBool() ||
+      !object.value(QStringLiteral("enforcementAvailable")).isBool() ||
+      !exactInteger(object.value(QStringLiteral("policyGeneration")), 0,
+                    4294967295LL) ||
+      !exactInteger(object.value(QStringLiteral("baselineStreams")), 0,
+                    kMaximumStreams) ||
+      !object.value(QStringLiteral("persistentPidRules")).isBool() ||
+      object.value(QStringLiteral("persistentPidRules")).toBool() ||
+      !object.value(QStringLiteral("existingStreamMigration")).isBool() ||
+      object.value(QStringLiteral("existingStreamMigration")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  QString status;
+  if (!boundedText(object.value(QStringLiteral("status")), 15, &status,
+                   false) ||
+      (status != QStringLiteral("Ready") &&
+       status != QStringLiteral("Unavailable")))
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  QString reason;
+  if (object.value(QStringLiteral("reason")).isNull()) {
+    reason.clear();
+  } else if (!boundedText(object.value(QStringLiteral("reason")), 47, &reason,
+                          false) ||
+             !brokerReasonIds().contains(reason)) {
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  }
+
+  const bool active = object.value(QStringLiteral("active")).toBool();
+  const bool enforcement =
+      object.value(QStringLiteral("enforcementAvailable")).toBool();
+  const bool ready = status == QStringLiteral("Ready");
+  const bool validReady =
+      ready && ((active && enforcement && reason.isEmpty()) ||
+                (!active && !enforcement &&
+                 reason == QStringLiteral("broker-not-running")));
+  const bool validUnavailable = !ready && !active && !enforcement &&
+                                !reason.isEmpty() &&
+                                reason != QStringLiteral("broker-not-running");
+  if (!validReady && !validUnavailable)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  snapshot->routeBrokerAvailable = ready;
+  snapshot->routeBrokerActive = active;
+  snapshot->routeBrokerReason = reason;
+  snapshot->routeEnforcementAvailable = enforcement;
+  return true;
+}
+
 bool decodeDefaultPlan(const QByteArray &payload,
                        const QString &expectedDirection,
                        const QString &expectedDevice, bool *changed,
@@ -707,6 +798,15 @@ QVariantList AudioAdapter::audioCards() const { return snapshot_.cards; }
 QVariantList AudioAdapter::audioRouteRules() const {
   return snapshot_.routeRules;
 }
+bool AudioAdapter::audioRouteBrokerAvailable() const {
+  return snapshot_.routeBrokerAvailable;
+}
+bool AudioAdapter::audioRouteBrokerActive() const {
+  return snapshot_.routeBrokerActive;
+}
+QString AudioAdapter::audioRouteBrokerReason() const {
+  return snapshot_.routeBrokerReason;
+}
 bool AudioAdapter::audioRouteEnforcementAvailable() const {
   return snapshot_.routeEnforcementAvailable;
 }
@@ -803,6 +903,32 @@ void AudioAdapter::startPolicyLoad(AudioPresentationSnapshot snapshot,
         }
         QString errorId;
         if (!AudioContracts::decodePolicy(payload, &snapshot, &errorId)) {
+          failLoad(errorId);
+          return;
+        }
+        startBrokerStatusLoad(std::move(snapshot), successStatusId);
+      });
+  if (!started)
+    failLoad(QStringLiteral("backend-unavailable"));
+}
+
+void AudioAdapter::startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
+                                         const QString &successStatusId) {
+  const bool started = startCommand(
+      {QStringLiteral("audio"), QStringLiteral("broker-status"),
+       QStringLiteral("--format"), QStringLiteral("json")},
+      static_cast<int>(kMaximumBrokerStatusBytes),
+      [this, snapshot = std::move(snapshot),
+       successStatusId](int exitCode, const QByteArray &payload,
+                        const QString &commandError) mutable {
+        if (!commandError.isEmpty() || exitCode != 0) {
+          failLoad(commandError.isEmpty()
+                       ? QStringLiteral("broker-status-unavailable")
+                       : commandError);
+          return;
+        }
+        QString errorId;
+        if (!AudioContracts::decodeBrokerStatus(payload, &snapshot, &errorId)) {
           failLoad(errorId);
           return;
         }

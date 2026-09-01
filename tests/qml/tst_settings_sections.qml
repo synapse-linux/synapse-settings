@@ -23,6 +23,9 @@ TestCase {
                 direction: "output",
                 deviceLabel: "Output"
             }]
+            property bool audioRouteBrokerAvailable: true
+            property bool audioRouteBrokerActive: false
+            property string audioRouteBrokerReason: "broker-not-running"
             property bool audioRouteEnforcementAvailable: false
             property var audioProcessChoices: [{
                 id: "playback-30",
@@ -99,6 +102,28 @@ TestCase {
         verify(section.applyPendingDefault())
         compare(backend.audioSets, 1)
         compare(backend.lastCall, ["output", "output-0123456789abcdef"])
+    }
+
+    function test_typedBrokerRuntimeState() {
+        let backend = createTemporaryObject(fakeBackend, this)
+        let section = createTemporaryObject(audioComponent, this, { backend: backend })
+        verify(section)
+        compare(section.brokerStateText(), "Inactive")
+        compare(section.brokerDetailText(), "Rules are stored; the new-stream Audio broker is not running.")
+        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
+        backend.audioRouteBrokerActive = true
+        backend.audioRouteBrokerReason = ""
+        backend.audioRouteEnforcementAvailable = true
+        compare(section.brokerStateText(), "Active")
+        compare(section.brokerDetailText(), "Rules apply automatically to new streams.")
+        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
+        backend.audioRouteBrokerAvailable = false
+        backend.audioRouteBrokerActive = false
+        backend.audioRouteBrokerReason = "invalid-response"
+        backend.audioRouteEnforcementAvailable = false
+        compare(section.brokerStateText(), "Unavailable")
+        compare(section.brokerDetailText(), "Rules are stored; the Audio broker status was rejected safely.")
+        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
     }
 
     function test_typedProcessExecutableAndDirectoryRules() {

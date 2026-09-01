@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.4.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.5.0-alpha.1"
 #endif
 
 typedef struct {
@@ -554,6 +554,7 @@ static void usage(FILE *out) {
           "  synapse-settings sections [--format text|json]\n"
           "  synapse-settings layers [--format text|json]\n"
           "  synapse-settings audio inventory [--format text|json]\n"
+          "  synapse-settings audio broker-status [--format text|json]\n"
           "  synapse-settings audio plan-default --direction output|input --device ID [--format text|json]\n"
           "  synapse-settings audio set-default --direction output|input --device ID --ack synapse-settings/audio-default/v1 [--format text|json]\n"
           "  synapse-settings audio policy show [--format text|json]\n"

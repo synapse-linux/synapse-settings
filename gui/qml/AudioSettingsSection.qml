@@ -17,6 +17,9 @@ Item {
     readonly property var streams: backend ? backend.audioStreams || [] : []
     readonly property var cards: backend ? backend.audioCards || [] : []
     readonly property var routeRules: backend ? backend.audioRouteRules || [] : []
+    readonly property bool routeBrokerAvailable: backend ? backend.audioRouteBrokerAvailable : false
+    readonly property bool routeBrokerActive: backend ? backend.audioRouteBrokerActive : false
+    readonly property string routeBrokerReason: backend ? backend.audioRouteBrokerReason || "" : ""
     readonly property bool routeEnforcementAvailable: backend ? backend.audioRouteEnforcementAvailable : false
 
     function activate() {
@@ -74,6 +77,30 @@ Item {
         }
     }
 
+    function brokerStateText() {
+        if (routeBrokerActive)
+            return qsTr("Active")
+        if (routeBrokerAvailable)
+            return qsTr("Inactive")
+        return qsTr("Unavailable")
+    }
+
+    function brokerDetailText() {
+        if (routeEnforcementAvailable)
+            return qsTr("Rules apply automatically to new streams.")
+        if (routeBrokerAvailable && routeBrokerReason === "broker-not-running")
+            return qsTr("Rules are stored; the new-stream Audio broker is not running.")
+        if (routeBrokerReason === "runtime-unavailable")
+            return qsTr("Rules are stored; private runtime status is unavailable.")
+        if (routeBrokerReason === "runtime-state-invalid" || routeBrokerReason === "invalid-response" || routeBrokerReason === "timeout")
+            return qsTr("Rules are stored; the Audio broker status was rejected safely.")
+        return qsTr("Rules are stored; new-stream enforcement is unavailable.")
+    }
+
+    function existingStreamBoundaryText() {
+        return qsTr("Existing streams are not moved.")
+    }
+
     function errorText(errorId) {
         switch (errorId) {
         case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
@@ -87,6 +114,7 @@ Item {
         case "default-plan-failed":
         case "default-apply-failed":
         case "route-policy-failed":
+        case "broker-status-unavailable":
         case "policy-unavailable": return qsTr("The Audio operation failed safely.")
         case "output-too-large":
         case "process-crashed": return qsTr("The Audio backend response was rejected.")
@@ -340,11 +368,30 @@ Item {
                 }
 
                 Label { text: qsTr("Per-application routing"); font.bold: true }
+                Frame {
+                    Layout.fillWidth: true
+                    RowLayout {
+                        anchors.fill: parent
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("New-stream Audio broker")
+                            font.bold: true
+                        }
+                        Label {
+                            text: root.brokerStateText()
+                            color: root.routeBrokerActive ? palette.highlight : palette.text
+                        }
+                    }
+                }
                 Label {
                     Layout.fillWidth: true
-                    text: root.routeEnforcementAvailable
-                          ? qsTr("Rules are active.")
-                          : qsTr("Rules are stored; automatic stream enforcement awaits the Audio broker.")
+                    text: root.brokerDetailText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.existingStreamBoundaryText()
                     wrapMode: Text.WordWrap
                     opacity: 0.7
                 }

@@ -11,7 +11,8 @@ broker_pid=
 trap 'if [[ -n "$broker_pid" ]]; then kill "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; fi; for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done; rm -rf "$work"' EXIT
 
 audio="$work/audio"
-mkdir -p "$audio" "$work/bin" "$work/config/synapse"
+mkdir -p "$audio" "$work/bin" "$work/config/synapse" "$work/runtime"
+chmod 700 "$work/runtime"
 cp "$(command -v sleep)" "$work/app-rule"
 cp "$(command -v sleep)" "$work/app-other"
 mkdir -p "$work/directory-apps"
@@ -123,8 +124,8 @@ EOF
 chmod 755 "$work/bin/pactl-fake"
 policy="$work/config/synapse/audio-route-policy-v1.json"
 BASE_ENV=(env HOME="$work" XDG_CONFIG_HOME="$work/config" \
-  SYNAPSE_PACTL="$work/bin/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$audio" \
-  SYNAPSE_AUDIO_ROUTE_POLICY="$policy")
+  XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_PACTL="$work/bin/pactl-fake" \
+  SYNAPSE_AUDIO_FIXTURES="$audio" SYNAPSE_AUDIO_ROUTE_POLICY="$policy")
 
 "${BASE_ENV[@]}" "$settings" audio inventory --format json >"$work/inventory.json"
 read -r sink_a sink_b _ source_b < <(python3 - "$work/inventory.json" <<'PY'
@@ -143,7 +144,7 @@ PY
   --ack synapse-settings/audio-route-policy/v1 --format json >"$work/rule-directory.json"
 
 "${BASE_ENV[@]}" "$broker" --probe --format json >"$work/probe.json"
-[[ $("$broker" --version) == 'synapse-audio-route-broker 0.4.0-alpha.1' ]]
+[[ $("$broker" --version) == 'synapse-audio-route-broker 0.5.0-alpha.1' ]]
 python3 - "$work/probe.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]));assert v['schema']=='synapse.settings.audio-route-broker-status/v1'
@@ -168,10 +169,20 @@ start_broker() {
     sleep 0.01
   done
   [[ -s $output ]]
-  python3 - "$output" <<'PY'
+  status_output="$work/$name.status.json"
+  "${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$status_output"
+  python3 - "$output" "$status_output" <<'PY'
 import json,sys
-v=json.loads(open(sys.argv[1]).readline());assert v['status']=='Ready' and v['active'] and v['enforcementAvailable']
+started=json.loads(open(sys.argv[1]).readline());status=json.load(open(sys.argv[2]))
+assert started['status']=='Ready' and started['active'] and started['enforcementAvailable']
+assert status==started and status['reason'] is None
+text=open(sys.argv[2]).read().lower()
+assert all(term not in text for term in ('"pid"','executable','rawendpoint','subscriber'))
 PY
+  socket_path="$work/runtime/synapse/audio-route-broker-v1.sock"
+  [[ -S $socket_path && $(stat -c %a "$socket_path") == 600 ]]
+  [[ $(stat -c %a "$work/runtime/synapse") == 700 ]]
+  [[ $(stat -c %a "$work/runtime/synapse/audio-route-broker-v1.lock") == 600 ]]
 }
 
 wait_broker() {
@@ -207,6 +218,22 @@ PY
 # the next unseen stream is independently resolved against the current policy.
 reset_streams
 start_broker applied-and-no-rule 2
+python3 - "$socket_path" <<'PY'
+import socket,sys
+client=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);client.settimeout(1);client.connect(sys.argv[1]);client.sendall(b'invalid-request\n')
+try: assert client.recv(1)==b''
+except ConnectionResetError: pass
+client.close()
+PY
+set +e
+"${BASE_ENV[@]}" "$broker" --foreground >"$work/duplicate-broker.json"
+duplicate_status=$?
+set -e
+[[ $duplicate_status != 0 ]]
+python3 - "$work/duplicate-broker.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='broker-already-running';assert not v['active'] and not v['enforcementAvailable']
+PY
 append_playback 31 10 "$rule_pid" Routed
 append_playback 32 10 "$other_pid" Unmatched
 printf "Event 'new' on sink-input #31\nEvent 'new' on sink-input #31\nEvent 'new' on sink-input #32\n" >"$events"
@@ -227,6 +254,12 @@ assert streams=={30:10,31:11,32:10}
 moves=open(sys.argv[3]).read().splitlines();assert len(moves)==1 and '\t31\t' in moves[0]
 assert all('process' not in k.lower() and 'path' not in k.lower() for receipt in lines for k in receipt)
 PY
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/inactive-after-stop.json"
+python3 - "$work/inactive-after-stop.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Ready' and not v['active'] and not v['enforcementAvailable'];assert v['reason']=='broker-not-running'
+PY
+[[ ! -e $socket_path ]]
 
 # A policy update affects only later new events. It does not reconcile the
 # baseline or the stream routed under the preceding generation.
@@ -265,6 +298,12 @@ reset_streams
 cp "$policy" "$work/policy.valid"
 start_broker policy-invalid 1
 printf ' ' >>"$policy"
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json \
+  >"$work/policy-invalid-runtime.status.json"
+python3 - "$work/policy-invalid-runtime.status.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='policy-unavailable';assert not v['active'] and not v['enforcementAvailable']
+PY
 append_playback 43 10 "$rule_pid" InvalidPolicy
 printf "Event 'new' on sink-input #43\n" >"$events"
 wait_broker
@@ -513,6 +552,95 @@ wait "$broker_pid"
 broker_pid=
 [[ ! -s "$audio/moves.log" ]]
 
+# The private runtime status client rejects malformed, stalled and loose-mode
+# peers while treating a stale unreachable socket as inactive.
+start_fake_status() {
+  local behavior=$1 mode=$2
+  rm -f "$socket_path"
+  python3 - "$socket_path" "$behavior" "$mode" <<'PY' &
+import os,socket,sys,time
+path,behavior,mode=sys.argv[1:]
+server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);server.bind(path);os.chmod(path,int(mode,8));server.listen(1)
+if behavior!='no-accept':
+    connection,_=server.accept();connection.recv(64)
+    if behavior=='malformed': connection.sendall(b'{"schema":"invalid"}\n')
+    elif behavior=='oversized':
+        try: connection.sendall(b'x'*5000+b'\n')
+        except BrokenPipeError: pass
+    elif behavior=='timeout': time.sleep(1)
+    connection.close()
+else: time.sleep(1)
+server.close()
+PY
+  fake_status_pid=$!
+  pids+=("$fake_status_pid")
+  for _ in $(seq 1 200); do [[ -S $socket_path ]] && break;sleep 0.01;done
+  [[ -S $socket_path ]]
+}
+
+start_fake_status malformed 600
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-malformed.json"
+wait "$fake_status_pid"
+python3 - "$work/status-malformed.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='invalid-response' and not v['active']
+PY
+
+start_fake_status oversized 600
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-oversized.json"
+wait "$fake_status_pid"
+python3 - "$work/status-oversized.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='invalid-response' and not v['active']
+PY
+
+start_fake_status timeout 600
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-timeout.json"
+wait "$fake_status_pid"
+python3 - "$work/status-timeout.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='timeout' and not v['enforcementAvailable']
+PY
+
+start_fake_status no-accept 666
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-loose-mode.json"
+kill "$fake_status_pid" 2>/dev/null || true
+wait "$fake_status_pid" 2>/dev/null || true
+python3 - "$work/status-loose-mode.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='runtime-state-invalid'
+PY
+
+rm -f "$socket_path"
+python3 - "$socket_path" <<'PY'
+import os,socket,sys
+server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);server.bind(sys.argv[1]);os.chmod(sys.argv[1],0o600);server.close()
+PY
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-stale.json"
+python3 - "$work/status-stale.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Ready' and v['reason']=='broker-not-running' and not v['active']
+PY
+rm -f "$socket_path"
+chmod 755 "$work/runtime/synapse"
+"${BASE_ENV[@]}" "$settings" audio broker-status --format json >"$work/status-directory-mode.json"
+chmod 700 "$work/runtime/synapse"
+python3 - "$work/status-directory-mode.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['status']=='Unavailable' and v['reason']=='runtime-state-invalid'
+PY
+
+mkdir "$work/runtime-symlink";chmod 700 "$work/runtime-symlink"
+ln -s "$work/runtime/synapse" "$work/runtime-symlink/synapse"
+env XDG_RUNTIME_DIR="$work/runtime-symlink" "$settings" audio broker-status --format json >"$work/status-symlink.json"
+env -u XDG_RUNTIME_DIR "$settings" audio broker-status --format json >"$work/status-no-runtime.json"
+python3 - "$work/status-symlink.json" "$work/status-no-runtime.json" <<'PY'
+import json,sys
+symlink,no_runtime=(json.load(open(path)) for path in sys.argv[1:])
+assert symlink['reason']=='runtime-state-invalid' and symlink['status']=='Unavailable'
+assert no_runtime['reason']=='runtime-unavailable' and no_runtime['status']=='Unavailable'
+PY
+
 # Broker status and all event receipts validate against pinned strict schemas.
 python3 - "$root" "$work" <<'PY'
 import json,sys
@@ -523,7 +651,9 @@ status_schema=json.loads((root/'schemas/audio-route-broker-status-v1.schema.json
 receipt_schema=json.loads((root/'schemas/audio-route-broker-receipt-v1.schema.json').read_text())
 Draft202012Validator.check_schema(status_schema);Draft202012Validator.check_schema(receipt_schema)
 status_validator=Draft202012Validator(status_schema);receipt_validator=Draft202012Validator(receipt_schema)
-status_validator.validate(json.loads((work/'probe.json').read_text()))
+status_paths=[work/'probe.json',work/'inactive-after-stop.json',work/'duplicate-broker.json',work/'status-malformed.json',work/'status-oversized.json',work/'status-timeout.json',work/'status-loose-mode.json',work/'status-stale.json',work/'status-directory-mode.json',work/'status-symlink.json',work/'status-no-runtime.json']
+status_paths.extend(work.glob('*.status.json'))
+for path in status_paths: status_validator.validate(json.loads(path.read_text()))
 receipts=0
 for path in work.glob('*.jsonl'):
     for line in path.read_text().splitlines():

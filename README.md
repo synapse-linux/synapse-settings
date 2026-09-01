@@ -1,13 +1,14 @@
 # Synapse Settings
 
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 4 keeps Audio policy and PipeWire authority
-outside QML while adding an offline broker candidate that can be activated only
-through a later deployment gate.
+new-stream Audio route broker. Alpha 5 adds a status-only private runtime channel
+and typed Settings presentation while keeping Audio policy and PipeWire authority
+outside QML. Broker activation remains a later deployment gate.
 
 ```bash
 make CORE_ROOT=/path/to/staged-core clean all test-all
 build/synapse-settings audio inventory --format json
+build/synapse-settings audio broker-status --format json
 build/synapse-settings audio plan-default --direction output --device OUTPUT_ID --format json
 build/synapse-settings audio policy show --format json
 build/synapse-settings audio resolve --path /canonical/application --direction output --format json
@@ -31,6 +32,8 @@ Audio capabilities in this slice:
   startup baseline;
 - typed broker status and per-event receipts with no PID, executable path or raw
   PipeWire endpoint;
+- owner-private, same-UID, bounded AF_UNIX status IPC with no mutation requests;
+- typed Active, Inactive and Unavailable broker presentation in Settings;
 - strict contract decoding, bounded output, bounded execution and single-flight
   GUI operations.
 
@@ -44,14 +47,17 @@ and endpoint remain available.
 Starting or restarting the broker establishes a baseline and never moves those
 existing streams. Duplicate, `change`, policy-change and endpoint-hotplug events
 do not migrate active streams. Existing-stream movement remains a separately
-reviewed capability with no implementation or acknowledgement in Alpha 4.
+reviewed capability with no implementation or acknowledgement in Alpha 5.
 
 `make install` stages a hardened systemd user unit but does not enable or start
 it. The current source candidate was not installed, enabled or run against live
 Audio. Fixture tests exercise all move paths through the test-only `pactl`
 override. Policy receipts still describe policy persistence only and therefore
-continue to report `routingApplied=false`; Settings runtime-status integration
-is a later gate.
+continue to report `routingApplied=false`. Settings obtains runtime state through
+`audio broker-status`, which sends one fixed read-only request to the broker's
+mode-0600 AF_UNIX socket in an owner-mode-0700 runtime directory. The C11 client
+rejects stale sockets, wrong ownership or modes, timeouts and noncanonical
+responses before the Qt adapter receives a typed contract.
 
 Docker inventory from Alpha 1 remains optional and bounded. CLI and broker
 runtime dependencies are `libsynapse-core.so.0` and `json-c`; the optional GUI

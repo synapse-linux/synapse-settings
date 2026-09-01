@@ -23,8 +23,9 @@
 - Policy persistence is not routing enforcement. The broker may enforce only
   post-baseline new-stream events; startup, restart, policy change, endpoint
   hotplug and `change` events must never move an already active stream.
-- Broker activation, existing-stream movement and deployed Settings status are
-  separate gates. Policy receipts must never claim that the broker moved audio.
+- Broker activation and existing-stream movement are separate gates. Policy
+  receipts must never claim that the broker moved audio; Settings may consume
+  only the separate read-only broker status contract.
 - Keep capture, Bluetooth pairing, safe playback tests, GoXLR control and profile
   mutation behind independent consent and capability gates.
 - Composition lock data and pacman state remain read-only inputs. Docker
@@ -34,5 +35,8 @@
 - Broker receipts expose no PID, executable, raw endpoint or subscriber line.
   A success claim requires fresh same-process identity, command success and
   post-move endpoint verification; partial failures compensate when provable.
+- Runtime status uses only a private `$XDG_RUNTIME_DIR/synapse` AF_UNIX endpoint,
+  mode 0600 in a mode-0700 owner directory. It accepts one bounded status request,
+  verifies same-UID peers and exposes no mutation operation or raw provider state.
 - Pass strict GCC/Clang, ASan/UBSan, analyzers, malformed policy, subprocess
   timeout, broker race/failure, schema, QML, exact-ISA and reproducibility tests.

@@ -95,6 +95,7 @@ static const char *pactl_binary(void) {
 static void audio_usage(FILE *out) {
   fputs("Usage:\n"
         "  synapse-settings audio inventory [--format text|json]\n"
+        "  synapse-settings audio broker-status [--format text|json]\n"
         "  synapse-settings audio plan-default --direction output|input "
         "--device ID [--format text|json]\n"
         "  synapse-settings audio set-default --direction output|input "
@@ -1384,6 +1385,8 @@ int settings_audio_command(int argc, char **argv) {
   }
   if (strcmp(argv[1], "policy") == 0 || strcmp(argv[1], "resolve") == 0)
     return settings_audio_route_command(argc, argv);
+  if (strcmp(argv[1], "broker-status") == 0)
+    return settings_audio_broker_status_command(argc, argv);
   if (strcmp(argv[1], "inventory") == 0) {
     const char *format = NULL;
     if (parse_format(argc, argv, 2, &format) != 0) {

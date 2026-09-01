@@ -27,7 +27,9 @@ class ScopedEnvironment final {
 public:
   ScopedEnvironment() {
     const QList<QByteArray> names = {
-        QByteArrayLiteral("HOME"), QByteArrayLiteral("XDG_CONFIG_HOME"),
+        QByteArrayLiteral("HOME"),
+        QByteArrayLiteral("XDG_CONFIG_HOME"),
+        QByteArrayLiteral("XDG_RUNTIME_DIR"),
         QByteArrayLiteral("SYNAPSE_PACTL"),
         QByteArrayLiteral("SYNAPSE_AUDIO_FIXTURES"),
         QByteArrayLiteral("SYNAPSE_AUDIO_ROUTE_POLICY")};
@@ -63,9 +65,14 @@ public:
     audio_ = root_ + QStringLiteral("/audio");
     bin_ = root_ + QStringLiteral("/bin");
     config_ = root_ + QStringLiteral("/config");
+    runtime_ = root_ + QStringLiteral("/runtime");
     applicationDirectory_ = root_ + QStringLiteral("/apps");
-    valid_ = QDir().mkpath(audio_) && QDir().mkpath(bin_) &&
-             QDir().mkpath(config_) && QDir().mkpath(applicationDirectory_);
+    valid_ =
+        QDir().mkpath(audio_) && QDir().mkpath(bin_) &&
+        QDir().mkpath(config_) && QDir().mkpath(runtime_) &&
+        QDir().mkpath(applicationDirectory_) &&
+        QFile::setPermissions(runtime_, QFile::ReadOwner | QFile::WriteOwner |
+                                            QFile::ExeOwner);
     if (!valid_)
       return;
     executable_ = applicationDirectory_ + QStringLiteral("/player");
@@ -158,6 +165,7 @@ public:
   void activate() const {
     qputenv("HOME", root_.toUtf8());
     qputenv("XDG_CONFIG_HOME", config_.toUtf8());
+    qputenv("XDG_RUNTIME_DIR", runtime_.toUtf8());
     qputenv("SYNAPSE_PACTL", pactl_.toUtf8());
     qputenv("SYNAPSE_AUDIO_FIXTURES", audio_.toUtf8());
     qputenv("SYNAPSE_AUDIO_ROUTE_POLICY", policy_.toUtf8());
@@ -169,6 +177,7 @@ private:
   QString audio_;
   QString bin_;
   QString config_;
+  QString runtime_;
   QString executable_;
   QString applicationDirectory_;
   QString pactl_;
@@ -240,6 +249,30 @@ private slots:
         "\"persistentPidRules\":false,\"existingStreamMigration\":false}\n");
     QVERIFY(!AudioContracts::decodePolicy(falsePolicy, &snapshot, &error));
 
+    const QByteArray activeBroker = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-route-broker-status/v1\","
+        "\"status\":\"Ready\",\"mode\":\"new-streams-only\","
+        "\"stateAuthority\":\"pipewire-pulse-model\",\"capable\":true,"
+        "\"active\":true,\"enforcementAvailable\":true,\"reason\":null,"
+        "\"policyGeneration\":7,\"baselineStreams\":2,"
+        "\"persistentPidRules\":false,\"existingStreamMigration\":false,"
+        "\"bounded\":true}\n");
+    QVERIFY(
+        AudioContracts::decodeBrokerStatus(activeBroker, &snapshot, &error));
+    QVERIFY(snapshot.routeBrokerAvailable);
+    QVERIFY(snapshot.routeBrokerActive);
+    QVERIFY(snapshot.routeEnforcementAvailable);
+    QVERIFY(snapshot.routeBrokerReason.isEmpty());
+    QByteArray falseBroker = activeBroker;
+    falseBroker.replace("\"reason\":null", "\"reason\":\"timeout\"");
+    QVERIFY(
+        !AudioContracts::decodeBrokerStatus(falseBroker, &snapshot, &error));
+    QByteArray expandedBroker = activeBroker;
+    expandedBroker.replace("\"bounded\":true",
+                           "\"unknown\":0,\"bounded\":true");
+    QVERIFY(
+        !AudioContracts::decodeBrokerStatus(expandedBroker, &snapshot, &error));
+
     bool changed = false;
     QString rule;
     const QByteArray falseReceipt = QByteArrayLiteral(
@@ -278,6 +311,10 @@ private slots:
     QCOMPARE(adapter.audioInputs().size(), 2);
     QCOMPARE(adapter.audioStreams().size(), 1);
     QCOMPARE(adapter.audioCards().size(), 1);
+    QVERIFY(adapter.audioRouteBrokerAvailable());
+    QVERIFY(!adapter.audioRouteBrokerActive());
+    QCOMPARE(adapter.audioRouteBrokerReason(),
+             QStringLiteral("broker-not-running"));
     QVERIFY(!adapter.audioRouteEnforcementAvailable());
 
     const QString output = adapter.audioOutputs()
