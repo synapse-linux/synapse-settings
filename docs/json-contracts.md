@@ -14,10 +14,15 @@ fields fail closed.
 | `synapse.settings.audio-route-policy-receipt/v1` | Atomic policy mutation receipt |
 | `synapse.settings.audio-route-resolution/v1` | Deterministic per-executable resolution |
 
-The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 2
+The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 3
 sets the former true and the latter false. The resolution contract returns one
 of `exact-executable`, `directory-prefix`, or `system-default` and separately
 reports whether the selected endpoint is currently available.
 
-Opaque Audio IDs are scoped by direction (`output-…` or `input-…`). Raw backend
-node names are never public contract fields.
+Opaque Audio IDs are scoped by direction (`output-…` or `input-…`). Stream IDs
+are bounded `playback-N` or `recording-N` tokens and must be unique within one
+inventory cohort. Raw backend node names are never public contract fields.
+
+The Qt adapter validates exact field sets, bounds, token forms, duplicate
+identities, direction/device consistency and the honest enforcement flags before
+publishing any projection. It never forwards raw contract objects to QML.

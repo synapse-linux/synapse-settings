@@ -371,9 +371,15 @@ static int parse_endpoints(json_object *array, audio_endpoint *items,
     if (!json_object_is_type(value, json_type_object))
       return -1;
     json_object *monitor = NULL;
-    if (skip_monitors &&
+    json_object *monitor_source = NULL;
+    int monitor_of_sink =
         json_object_object_get_ex(value, "monitor_of_sink", &monitor) &&
-        monitor && !json_object_is_type(monitor, json_type_null))
+        monitor && !json_object_is_type(monitor, json_type_null);
+    int named_monitor =
+        json_object_object_get_ex(value, "monitor_source", &monitor_source) &&
+        json_object_is_type(monitor_source, json_type_string) &&
+        json_object_get_string_len(monitor_source) > 0;
+    if (skip_monitors && (monitor_of_sink || named_monitor))
       continue;
     if (*count >= AUDIO_ENDPOINT_LIMIT)
       return -1;
@@ -474,6 +480,8 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
     memset(stream, 0, sizeof(*stream));
     stream->direction = direction;
     int index = json_int_value(value, "index", -1);
+    if (index < 0)
+      return -1;
     int written = snprintf(
         stream->id, sizeof(stream->id), "%s-%d",
         strcmp(direction, "playback") == 0 ? "playback" : "recording", index);
@@ -506,6 +514,21 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
     stream->volume_percent = volume_percent(value);
     stream->muted = json_bool_value(value, "mute", 0);
   }
+  return 0;
+}
+
+static int stream_compare(const void *left, const void *right) {
+  const audio_stream *a = left;
+  const audio_stream *b = right;
+  return strcmp(a->id, b->id);
+}
+
+static int validate_stream_identities(audio_inventory *inventory) {
+  qsort(inventory->streams, inventory->stream_count,
+        sizeof(inventory->streams[0]), stream_compare);
+  for (size_t i = 1; i < inventory->stream_count; i++)
+    if (strcmp(inventory->streams[i - 1U].id, inventory->streams[i].id) == 0)
+      return -1;
   return 0;
 }
 
@@ -596,6 +619,7 @@ static int load_audio_inventory(audio_inventory *inventory) {
                       default_input, "input", 1) != 0 ||
       parse_stream_array(playback, inventory, "playback") != 0 ||
       parse_stream_array(recording, inventory, "recording") != 0 ||
+      validate_stream_identities(inventory) != 0 ||
       parse_cards(cards, inventory) != 0) {
     reason = "invalid-response";
     goto done;

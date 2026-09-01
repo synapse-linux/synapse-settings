@@ -1,10 +1,11 @@
 # Audio Settings scope
 
-## Alpha 2 boundary
+## Alpha 3 boundary
 
 The C11 backend provides:
 
-- bounded outputs, inputs, streams and cards;
+- bounded outputs, physical inputs, streams and cards; Pulse monitor sources are
+  excluded from the default-input selector;
 - stable opaque endpoint identities;
 - default output/input planning;
 - exact-acknowledgement, fixed-argv default mutation;
@@ -15,6 +16,14 @@ The C11 backend provides:
 
 The exact default acknowledgement is `synapse-settings/audio-default/v1`. The
 application-policy acknowledgement is `synapse-settings/audio-route-policy/v1`.
+Both constants are owned by the trusted adapter/core boundary and never reach
+QML.
+
+The Alpha 3 Qt adapter strictly decodes these contracts, publishes bounded
+QVariant projections, serializes GUI operations, owns native path choosers and
+performs a complete refresh after every accepted receipt. The standalone host
+uses only Qt Quick feature QML, so the Audio section does not depend on
+Quickshell-specific types.
 
 ## Application identity
 
@@ -40,7 +49,7 @@ output rules for the same application.
 
 ## Enforcement status
 
-Alpha 2 persists and resolves policy but does not yet move streams. Every policy
+Alpha 3 persists and resolves policy but does not yet move streams. Every policy
 view, receipt and resolution reports `audio-route-broker-not-integrated` and
 `enforcementAvailable=false`. A receipt means only that the private policy was
 atomically stored; it explicitly reports `routingApplied=false`.

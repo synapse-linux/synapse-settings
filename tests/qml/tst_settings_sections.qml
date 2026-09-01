@@ -24,13 +24,25 @@ TestCase {
                 deviceLabel: "Output"
             }]
             property bool audioRouteEnforcementAvailable: false
+            property var audioProcessChoices: [{
+                id: "playback-30",
+                label: "Game",
+                direction: "playback",
+                target: "output-0123456789abcdef"
+            }]
+            property bool audioProcessChoiceOpen: false
+            property string audioStatusId: ""
+            property string audioErrorId: ""
             property int audioLoads: 0
             property int audioSets: 0
             property int processRules: 0
             property int executableRules: 0
             property int directoryRules: 0
+            property int confirmedProcessRules: 0
+            property int cancelledProcessRules: 0
             property int removedRules: 0
             property var lastCall: []
+            signal audioProcessChoiceRequested()
 
             function loadAudio() { audioLoads++ }
             function setAudioDefault(direction, device) {
@@ -39,7 +51,18 @@ TestCase {
             }
             function chooseAudioProcessRule(direction, device) {
                 processRules++
+                audioProcessChoiceOpen = true
                 lastCall = [direction, device]
+                audioProcessChoiceRequested()
+            }
+            function confirmAudioProcessRule(streamId) {
+                confirmedProcessRules++
+                audioProcessChoiceOpen = false
+                lastCall = [streamId]
+            }
+            function cancelAudioProcessRule() {
+                cancelledProcessRules++
+                audioProcessChoiceOpen = false
             }
             function chooseAudioExecutableRule(direction, device) {
                 executableRules++
@@ -84,6 +107,9 @@ TestCase {
         verify(section)
         section.chooseProcessRule("output", "output-0123456789abcdef")
         compare(backend.processRules, 1)
+        backend.confirmAudioProcessRule("playback-30")
+        compare(backend.confirmedProcessRules, 1)
+        compare(backend.lastCall, ["playback-30"])
         section.chooseExecutableRule("input", "input-0123456789abcdef")
         compare(backend.executableRules, 1)
         section.chooseDirectoryRule("output", "output-0123456789abcdef")

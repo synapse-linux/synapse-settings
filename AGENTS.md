@@ -3,10 +3,15 @@
 - The authoritative settings backend is bounded C11 and works headlessly.
 - QML is presentation-only: it cannot parse raw JSON, inspect `/proc`, resolve
   paths, construct commands, inject environments, or mutate PipeWire directly.
+- The Qt/C++ adapter is a thin typed boundary only. It may decode fixed C-core
+  contracts, own native choosers and publish bounded projections; Audio policy
+  and PipeWire authority remain in the C11 core and future broker.
 - Execute Audio subprocesses with fixed absolute argv, bounded output and bounded
   time. Test executable/path overrides are compile-time test hooks only.
 - Expose endpoint and stream identities as stable opaque tokens; do not expose
   raw PipeWire names, device addresses, PIDs, command lines or environments.
+- Production GUI discovery is fixed to a same-directory installed core or
+  `/usr/bin/synapse-settings`; never expose backend or argv selection to QML.
 - Default-device mutation requires the exact acknowledgement, a typed endpoint
   ID, and post-write verification.
 - Persist application Audio policy privately with canonical JSON, mode 0600,

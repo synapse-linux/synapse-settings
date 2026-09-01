@@ -90,7 +90,7 @@ assert [x['id'] for x in value['sections']]==['layers','audio','input','themes']
 assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections'])
 PY
 "$binary" sections --format text | grep -Fq $'audio\tAudio\taudio-card\tavailable'
-[[ $($binary --version) == 'synapse-settings 0.2.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 0.3.0-alpha.1' ]]
 "$binary" --help | grep -Fq 'synapse-settings audio policy set-rule'
 
 start=$(date +%s)
@@ -119,9 +119,10 @@ cat >"$audio/sinks.json" <<'EOF'
 EOF
 cat >"$audio/sources.json" <<'EOF'
 [
- {"index":20,"name":"source.a","description":"Built-in microphone","monitor_of_sink":null,"mute":false,"volume":{"mono":{"value":32768}}},
- {"index":21,"name":"source.b","description":"USB microphone","monitor_of_sink":null,"mute":true,"volume":{"mono":{"value":65536}}},
- {"index":22,"name":"sink.a.monitor","description":"Monitor","monitor_of_sink":10,"mute":false,"volume":{"mono":{"value":65536}}}
+ {"index":20,"name":"source.a","description":"Built-in microphone","monitor_of_sink":null,"monitor_source":"","mute":false,"volume":{"mono":{"value":32768}}},
+ {"index":21,"name":"source.b","description":"USB microphone","monitor_of_sink":null,"monitor_source":"","mute":true,"volume":{"mono":{"value":65536}}},
+ {"index":22,"name":"sink.a.monitor","description":"Modern monitor","monitor_of_sink":null,"monitor_source":"sink.a","mute":false,"volume":{"mono":{"value":65536}}},
+ {"index":23,"name":"sink.b.monitor","description":"Legacy monitor","monitor_of_sink":11,"mute":false,"volume":{"mono":{"value":65536}}}
 ]
 EOF
 cat >"$audio/sink-inputs.json" <<EOF
@@ -225,11 +226,34 @@ import json,sys
 v=json.load(open(sys.argv[1]));assert v['available'] is False and v['reason']=='invalid-response'
 PY
 mv "$audio/sinks.valid.json" "$audio/sinks.json"
+cp "$audio/sink-inputs.json" "$audio/sink-inputs.valid.json"
+python - "$audio/sink-inputs.json" <<'PY'
+import json,sys
+p=sys.argv[1];v=json.load(open(p));v.append(dict(v[0]));json.dump(v,open(p,'w'))
+PY
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json >"$work/audio-duplicate-stream.json"
+python - "$work/audio-duplicate-stream.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['available'] is False and v['reason']=='invalid-response'
+PY
+cp "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
+python - "$audio/sink-inputs.json" <<'PY'
+import json,sys
+p=sys.argv[1];v=json.load(open(p));v[0]['index']=-1;json.dump(v,open(p,'w'))
+PY
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json >"$work/audio-negative-stream.json"
+python - "$work/audio-negative-stream.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));assert v['available'] is False and v['reason']=='invalid-response'
+PY
+mv "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
 for args in \
   "audio set-default --direction output --device $integrated_output --ack wrong" \
   'audio set-default --direction output --device raw-device --ack synapse-settings/audio-default/v1' \
   "audio plan-default --direction output --device $integrated_output --ack synapse-settings/audio-default/v1"; do
   set +e
+  # The fixture cases are reviewed argument vectors encoded without glob bytes.
+  # shellcheck disable=SC2086
   "${AUDIO_ENV[@]}" "$binary" $args >/dev/null 2>&1
   status=$?
   set -e
@@ -237,9 +261,9 @@ for args in \
 done
 
 # Private deterministic per-executable and directory audio routing policy.
-read -r built_in_input usb_input < <(python - "$work/audio-after.json" <<'PY'
+read -r usb_input < <(python - "$work/audio-after.json" <<'PY'
 import json,sys
-v=json.load(open(sys.argv[1]));print(v['inputs'][0]['id'],v['inputs'][1]['id'])
+v=json.load(open(sys.argv[1]));print(v['inputs'][1]['id'])
 PY
 )
 mkdir -p "$work/steam/library/special" "$work/steam2"
@@ -359,6 +383,8 @@ for args in \
   "audio policy set-rule --match executable --path $work/steam/library/game --direction output --device $integrated_output --ack wrong" \
   "audio resolve --path $work/steam/library --direction output"; do
   set +e
+  # The fixture cases are reviewed argument vectors encoded without glob bytes.
+  # shellcheck disable=SC2086
   "${ROUTE_ENV[@]}" "$binary" $args >/dev/null 2>&1
   status=$?
   set -e

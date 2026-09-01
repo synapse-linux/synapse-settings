@@ -11,6 +11,7 @@ Item {
     property bool loaded: false
     property string pendingDirection: ""
     property string pendingDevice: ""
+    property string selectedProcessStream: ""
     readonly property var outputs: backend ? backend.audioOutputs || [] : []
     readonly property var inputs: backend ? backend.audioInputs || [] : []
     readonly property var streams: backend ? backend.audioStreams || [] : []
@@ -33,9 +34,7 @@ Item {
     }
 
     function applyPendingDefault() {
-        if (pendingDirection === "" || pendingDevice === "")
-            return false
-        if (!backend)
+        if (pendingDirection === "" || pendingDevice === "" || !backend)
             return false
         backend.setAudioDefault(pendingDirection, pendingDevice)
         pendingDirection = ""
@@ -63,18 +62,115 @@ Item {
             backend.removeAudioRouteRule(ruleId)
     }
 
+    function statusText(statusId) {
+        switch (statusId) {
+        case "audio-loaded": return qsTr("Audio devices updated.")
+        case "audio-default-applied": return qsTr("Default Audio device changed and verified.")
+        case "audio-default-unchanged": return qsTr("The selected device was already the default.")
+        case "audio-route-rule-saved": return qsTr("Application Audio rule saved.")
+        case "audio-route-rule-unchanged": return qsTr("The Application Audio rule was already present.")
+        case "audio-route-rule-removed": return qsTr("Application Audio rule removed.")
+        default: return ""
+        }
+    }
+
+    function errorText(errorId) {
+        switch (errorId) {
+        case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
+        case "selection-invalid": return qsTr("The selected Audio item is no longer available.")
+        case "path-invalid": return qsTr("The selected path is invalid.")
+        case "timeout": return qsTr("The Audio backend did not respond in time.")
+        case "contract-invalid": return qsTr("The Audio backend returned an invalid contract.")
+        case "backend-unavailable":
+        case "start-failed": return qsTr("The Audio backend is unavailable.")
+        case "backend-failed":
+        case "default-plan-failed":
+        case "default-apply-failed":
+        case "route-policy-failed":
+        case "policy-unavailable": return qsTr("The Audio operation failed safely.")
+        case "output-too-large":
+        case "process-crashed": return qsTr("The Audio backend response was rejected.")
+        default: return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
+        }
+    }
+
     onVisibleChanged: if (visible) activate()
     Component.onCompleted: if (visible) activate()
 
+    Connections {
+        target: root.backend
+        function onAudioProcessChoiceRequested() {
+            root.selectedProcessStream = ""
+            processDialog.open()
+        }
+    }
+
     Dialog {
         id: confirmDefault
-        title: qsTr("Cambia dispositivo predefinito")
+        title: qsTr("Change default device")
         modal: true
+        anchors.centerIn: parent
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: root.applyPendingDefault()
         onRejected: {
             root.pendingDirection = ""
             root.pendingDevice = ""
+        }
+    }
+
+    Dialog {
+        id: processDialog
+        title: qsTr("Choose an active Audio process")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(root.width - 40, 560)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            root.selectedProcessStream = ""
+            const button = standardButton(Dialog.Ok)
+            if (button)
+                button.enabled = false
+        }
+        onAccepted: {
+            if (root.backend && root.selectedProcessStream !== "")
+                root.backend.confirmAudioProcessRule(root.selectedProcessStream)
+        }
+        onRejected: if (root.backend) root.backend.cancelAudioProcessRule()
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("The rule will follow the canonical executable, never the PID.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(320, Math.max(64, processChoicesColumn.implicitHeight))
+                clip: true
+
+                ColumnLayout {
+                    id: processChoicesColumn
+                    width: parent.width
+                    Repeater {
+                        model: root.backend ? root.backend.audioProcessChoices || [] : []
+                        delegate: RadioButton {
+                            id: processChoice
+                            required property var modelData
+                            Layout.fillWidth: true
+                            text: processChoice.modelData.label
+                            checked: root.selectedProcessStream === processChoice.modelData.id
+                            onClicked: {
+                                root.selectedProcessStream = processChoice.modelData.id
+                                const button = processDialog.standardButton(Dialog.Ok)
+                                if (button)
+                                    button.enabled = true
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -90,7 +186,7 @@ Item {
 
         Label {
             Layout.fillWidth: true
-            text: qsTr("Dispositivi e stream sono pubblicati dal backend tipizzato.")
+            text: qsTr("Devices and streams are published by the typed backend.")
             wrapMode: Text.WordWrap
             opacity: 0.7
         }
@@ -103,8 +199,24 @@ Item {
 
         Label {
             Layout.fillWidth: true
+            visible: root.backend && root.statusText(root.backend.audioStatusId || "") !== ""
+            text: root.backend ? root.statusText(root.backend.audioStatusId || "") : ""
+            color: palette.highlight
+            wrapMode: Text.WordWrap
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.backend && root.errorText(root.backend.audioErrorId || "") !== ""
+            text: root.backend ? root.errorText(root.backend.audioErrorId || "") : ""
+            color: palette.brightText
+            wrapMode: Text.WordWrap
+        }
+
+        Label {
+            Layout.fillWidth: true
             visible: root.loaded && root.backend && !root.backend.audioBusy && !root.backend.audioAvailable
-            text: root.backend && root.backend.audioReason ? qsTr("Audio non disponibile: %1").arg(root.backend.audioReason) : qsTr("Audio non disponibile")
+            text: root.backend && root.backend.audioReason ? qsTr("Audio unavailable: %1").arg(root.backend.audioReason) : qsTr("Audio unavailable")
             wrapMode: Text.WordWrap
         }
 
@@ -118,7 +230,7 @@ Item {
                 width: parent.width
                 spacing: 14
 
-                Label { text: qsTr("Uscite"); font.bold: true }
+                Label { text: qsTr("Outputs"); font.bold: true }
                 Repeater {
                     model: root.outputs
                     delegate: Frame {
@@ -132,28 +244,28 @@ Item {
                                 text: outputRow.modelData.label
                                 elide: Text.ElideRight
                             }
-                            Label { text: outputRow.modelData.muted ? qsTr("Muto") : outputRow.modelData.volumePercent + "%" }
+                            Label { text: outputRow.modelData.muted ? qsTr("Muted") : outputRow.modelData.volumePercent + "%" }
                             Button {
-                                text: outputRow.modelData.default ? qsTr("Predefinita") : qsTr("Imposta")
+                                text: outputRow.modelData.default ? qsTr("Default") : qsTr("Set")
                                 enabled: !outputRow.modelData.default && !root.backend.audioBusy
                                 onClicked: root.requestDefault("output", outputRow.modelData.id)
                             }
                             Button {
-                                text: qsTr("Instrada…")
+                                text: qsTr("Route…")
                                 enabled: !root.backend.audioBusy
                                 onClicked: outputRouteMenu.open()
                                 Menu {
                                     id: outputRouteMenu
                                     MenuItem {
-                                        text: qsTr("Processo attivo…")
+                                        text: qsTr("Active process…")
                                         onTriggered: root.chooseProcessRule("output", outputRow.modelData.id)
                                     }
                                     MenuItem {
-                                        text: qsTr("Eseguibile…")
+                                        text: qsTr("Executable…")
                                         onTriggered: root.chooseExecutableRule("output", outputRow.modelData.id)
                                     }
                                     MenuItem {
-                                        text: qsTr("Cartella…")
+                                        text: qsTr("Directory…")
                                         onTriggered: root.chooseDirectoryRule("output", outputRow.modelData.id)
                                     }
                                 }
@@ -162,7 +274,7 @@ Item {
                     }
                 }
 
-                Label { text: qsTr("Ingressi"); font.bold: true }
+                Label { text: qsTr("Inputs"); font.bold: true }
                 Repeater {
                     model: root.inputs
                     delegate: Frame {
@@ -176,28 +288,28 @@ Item {
                                 text: inputRow.modelData.label
                                 elide: Text.ElideRight
                             }
-                            Label { text: inputRow.modelData.muted ? qsTr("Muto") : inputRow.modelData.volumePercent + "%" }
+                            Label { text: inputRow.modelData.muted ? qsTr("Muted") : inputRow.modelData.volumePercent + "%" }
                             Button {
-                                text: inputRow.modelData.default ? qsTr("Predefinito") : qsTr("Imposta")
+                                text: inputRow.modelData.default ? qsTr("Default") : qsTr("Set")
                                 enabled: !inputRow.modelData.default && !root.backend.audioBusy
                                 onClicked: root.requestDefault("input", inputRow.modelData.id)
                             }
                             Button {
-                                text: qsTr("Instrada…")
+                                text: qsTr("Route…")
                                 enabled: !root.backend.audioBusy
                                 onClicked: inputRouteMenu.open()
                                 Menu {
                                     id: inputRouteMenu
                                     MenuItem {
-                                        text: qsTr("Processo attivo…")
+                                        text: qsTr("Active process…")
                                         onTriggered: root.chooseProcessRule("input", inputRow.modelData.id)
                                     }
                                     MenuItem {
-                                        text: qsTr("Eseguibile…")
+                                        text: qsTr("Executable…")
                                         onTriggered: root.chooseExecutableRule("input", inputRow.modelData.id)
                                     }
                                     MenuItem {
-                                        text: qsTr("Cartella…")
+                                        text: qsTr("Directory…")
                                         onTriggered: root.chooseDirectoryRule("input", inputRow.modelData.id)
                                     }
                                 }
@@ -206,10 +318,10 @@ Item {
                     }
                 }
 
-                Label { text: qsTr("Stream applicazioni"); font.bold: true }
+                Label { text: qsTr("Application streams"); font.bold: true }
                 Label {
                     visible: root.streams.length === 0
-                    text: qsTr("Nessuno stream attivo")
+                    text: qsTr("No active streams")
                     opacity: 0.7
                 }
                 Repeater {
@@ -221,24 +333,24 @@ Item {
                         RowLayout {
                             anchors.fill: parent
                             Label { Layout.fillWidth: true; text: streamRow.modelData.label; elide: Text.ElideRight }
-                            Label { text: streamRow.modelData.direction === "playback" ? qsTr("Riproduzione") : qsTr("Registrazione") }
+                            Label { text: streamRow.modelData.direction === "playback" ? qsTr("Playback") : qsTr("Recording") }
                             Label { text: streamRow.modelData.volumePercent + "%" }
                         }
                     }
                 }
 
-                Label { text: qsTr("Instradamento per applicazione"); font.bold: true }
+                Label { text: qsTr("Per-application routing"); font.bold: true }
                 Label {
                     Layout.fillWidth: true
                     text: root.routeEnforcementAvailable
-                          ? qsTr("Le regole sono attive.")
-                          : qsTr("Le regole vengono salvate; l’applicazione automatica agli stream sarà attivata dal broker audio.")
+                          ? qsTr("Rules are active.")
+                          : qsTr("Rules are stored; automatic stream enforcement awaits the Audio broker.")
                     wrapMode: Text.WordWrap
                     opacity: 0.7
                 }
                 Label {
                     visible: root.routeRules.length === 0
-                    text: qsTr("Nessuna regola per processo o percorso")
+                    text: qsTr("No process or path rules")
                     opacity: 0.7
                 }
                 Repeater {
@@ -257,17 +369,17 @@ Item {
                                     elide: Text.ElideMiddle
                                 }
                                 Label {
-                                    text: (routeRow.modelData.matchType === "executable" ? qsTr("Eseguibile") : qsTr("Cartella"))
-                                          + " · " + (routeRow.modelData.direction === "output" ? qsTr("Uscita") : qsTr("Ingresso"))
+                                    text: (routeRow.modelData.matchType === "executable" ? qsTr("Executable") : qsTr("Directory"))
+                                          + " · " + (routeRow.modelData.direction === "output" ? qsTr("Output") : qsTr("Input"))
                                     opacity: 0.7
                                 }
                             }
                             Label {
-                                text: routeRow.modelData.deviceLabel
+                                text: routeRow.modelData.deviceAvailable === false ? qsTr("Unavailable device") : routeRow.modelData.deviceLabel
                                 elide: Text.ElideRight
                             }
                             Button {
-                                text: qsTr("Rimuovi")
+                                text: qsTr("Remove")
                                 enabled: !root.backend.audioBusy
                                 onClicked: root.removeRouteRule(routeRow.modelData.id)
                             }
@@ -275,7 +387,7 @@ Item {
                     }
                 }
 
-                Label { text: qsTr("Schede e profili"); font.bold: true }
+                Label { text: qsTr("Cards and profiles"); font.bold: true }
                 Repeater {
                     model: root.cards
                     delegate: Frame {
