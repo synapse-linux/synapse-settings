@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio_adapter.h"
+#include "localization.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -33,6 +34,7 @@ public:
         QByteArrayLiteral("SYNAPSE_PACTL"),
         QByteArrayLiteral("SYNAPSE_AUDIO_FIXTURES"),
         QByteArrayLiteral("SYNAPSE_AUDIO_ROUTE_POLICY"),
+        QByteArrayLiteral("SYNAPSE_SETTINGS_TEST_BACKEND"),
         QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_LOG"),
         QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_MODE")};
     for (const QByteArray &name : names) {
@@ -235,6 +237,38 @@ private slots:
   void initTestCase() {
     QVERIFY2(QFileInfo(testBackend()).isExecutable(),
              "SYNAPSE_SETTINGS_TEST_BACKEND must name the fixture binary");
+  }
+
+  void localizationUsesBoundedEnglishFallback() {
+    SettingsLocalization localization;
+    QVERIFY(localization.initialize(QStringLiteral("it_IT.UTF-8@euro")));
+    QCOMPARE(localization.localeId(), QStringLiteral("it_IT"));
+    QCOMPARE(QCoreApplication::translate("Main", "Settings"),
+             QStringLiteral("Impostazioni"));
+
+    QVERIFY(localization.initialize(QStringLiteral("fr_FR")));
+    QCOMPARE(localization.localeId(), QStringLiteral("en_US"));
+    QCOMPARE(QCoreApplication::translate("Main", "Settings"),
+             QStringLiteral("Settings"));
+
+    QString unsafeLocale = QStringLiteral("it_IT");
+    unsafeLocale.append(QChar(0x1f));
+    QVERIFY(localization.initialize(unsafeLocale));
+    QCOMPARE(localization.localeId(), QStringLiteral("en_US"));
+  }
+
+  void defaultQmlConstructorIsFixtureBoundInTestBuild() {
+    ScopedEnvironment environment;
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_TEST_BACKEND",
+                    QByteArrayLiteral("/usr/bin/false")));
+    AudioAdapter adapter;
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(!adapter.audioSnapshotReady());
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.count(), 1, 3000);
+    QCOMPARE(loaded.constFirst().constFirst().toBool(), false);
+    QVERIFY(!adapter.audioSnapshotReady());
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("backend-failed"));
   }
 
   void contractDecodersRejectMalformedInput() {

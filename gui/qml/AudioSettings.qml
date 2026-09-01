@@ -6,14 +6,16 @@ Item {
     id: root
 
     required property var backend
+    property bool active: visible
     readonly property bool contentLoaded: sectionLoader.status === Loader.Ready
 
     Loader {
         id: sectionLoader
         anchors.fill: parent
-        active: root.visible
+        active: root.active
         asynchronous: true
         sourceComponent: AudioSettingsSection {
+            active: root.active
             backend: root.backend
         }
     }

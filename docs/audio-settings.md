@@ -136,6 +136,34 @@ single-stream transaction described above. Neither receipt implies the other,
 and neither a policy write nor broker status proves a move. QML never subscribes
 to PipeWire, opens the runtime socket or constructs raw `pactl` operations.
 
+## Alpha 7 shell-host module
+
+The existing Qt adapter and host-neutral feature QML are packaged as the
+`Synapse.Settings.Audio` module. `AudioBackend` is an engine-owned singleton;
+its production constructor uses only `/usr/bin/synapse-settings`. The module's
+`AudioShellHost` exposes only bounded readiness, availability, activity and
+typed reason/status/error properties while rendering the same
+`AudioSettings.qml` presentation.
+
+The shell controls one explicit `active` property. Activating the module starts
+only the established read-only inventory, policy view and broker-status cohort.
+Mutations remain behind the same visible confirmations and adapter-owned plan,
+acknowledgement, receipt validation and complete refresh. Neither loading the
+module nor selecting the Audio section changes a default, policy, stream,
+profile, service or package state.
+
+Executable and directory selection remains a native adapter responsibility. A
+shell must opt into `QApplication`; otherwise the chooser fails with
+`native-dialog-unavailable` before any backend call. Module tests compile a
+separate plugin with the fixture backend override. The production plugin has no
+test-backend literal or environment hook.
+
+The module embeds provisional `en_US` and `it_IT` catalogues. Unsupported or
+malformed locale requests fall back to `en_US`; the remaining pinned GUI
+catalogues are still required before localization can be called complete.
+Installation, shell deployment, package promotion and live Audio qualification
+remain separate gates.
+
 ## Remaining Audio work
 
 Typed volume/mute/balance, profiles and ports, levels, safe playback tests,

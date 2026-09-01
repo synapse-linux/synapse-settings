@@ -1,13 +1,21 @@
 # Audio Settings Qt presentation
 
-`AudioSettings.qml` lazily instantiates `AudioSettingsSection.qml` only while the
-Audio section is visible. `Main.qml` is a standalone Qt Quick host that injects
-one `AudioAdapter` object as a required root property; feature QML has no
-Quickshell import.
+`AudioSettings.qml` lazily instantiates `AudioSettingsSection.qml` only while an
+explicit host-owned `active` property is true. `Main.qml` is a standalone Qt
+Quick host that injects one `AudioAdapter` object as a required root property;
+feature QML has no Quickshell import.
+
+Alpha 7 also exports the same presentation through the
+`Synapse.Settings.Audio` QML module. Its Qt extension plugin registers one
+engine-owned `AudioBackend` singleton and `AudioShellHost` renders the unchanged
+feature QML. Production fixes the singleton backend to
+`/usr/bin/synapse-settings`; the test-only plugin variant can select the fixture
+binary. Package-owned translations initialize when the module loads, with
+unknown locales falling back to `en_US`.
 
 The adapter implements these properties:
 
-- `audioBusy`, `audioAvailable`, `audioReason`;
+- `audioBusy`, `audioSnapshotReady`, `audioAvailable`, `audioReason`;
 - `audioOutputs`, `audioInputs`, `audioStreams`, `audioCards`;
 - `audioRouteRules`, `audioRouteBrokerAvailable`, `audioRouteBrokerActive`,
   `audioRouteBrokerReason`, `audioRouteEnforcementAvailable`;

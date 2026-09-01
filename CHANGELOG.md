@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0-alpha.1
+
+- Package the existing typed Audio adapter and host-neutral feature QML as the
+  reusable `Synapse.Settings.Audio` Qt QML module.
+- Register one engine-owned `AudioBackend` singleton that uses only the fixed
+  production `/usr/bin/synapse-settings` boundary; a separately compiled test
+  plugin may use the existing fixture backend override.
+- Add `AudioShellHost`, exposing only bounded readiness, availability, busy,
+  broker, status, reason and error projections to a shell host.
+- Keep feature loading explicit and lazy through an `active` property while
+  preserving the complete inventory-policy-broker-status refresh cohort.
+- Fail path selection safely when a host did not opt into `QApplication`, and
+  make unknown or malformed GUI locales fall back deterministically to
+  `en_US`.
+- Add plugin metadata, QML tooling types, staged-module tests, two-catalogue
+  localization smoke tests and production test-hook exclusion checks.
+- Keep the integration candidate source-only: no installation, package
+  promotion, shell replacement, broker activation or live Audio mutation is
+  performed.
+
 ## 0.6.0-alpha.1
 
 - Add a separate read-only `plan-stream-move` contract and explicitly

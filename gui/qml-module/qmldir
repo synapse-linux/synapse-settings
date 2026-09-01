@@ -1,0 +1,7 @@
+module Synapse.Settings.Audio
+plugin synapse_settings_audio_qml
+classname SynapseSettingsAudioPlugin
+typeinfo synapse-settings-audio.qmltypes
+AudioSettings 1.0 AudioSettings.qml
+AudioSettingsSection 1.0 AudioSettingsSection.qml
+AudioShellHost 1.0 AudioShellHost.qml

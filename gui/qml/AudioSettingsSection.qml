@@ -8,6 +8,7 @@ Item {
     id: root
 
     required property var backend
+    property bool active: visible
     property bool loaded: false
     property string pendingDirection: ""
     property string pendingDevice: ""
@@ -144,6 +145,7 @@ Item {
         case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
         case "selection-invalid": return qsTr("The selected Audio item is no longer available.")
         case "path-invalid": return qsTr("The selected path is invalid.")
+        case "native-dialog-unavailable": return qsTr("The native Audio path chooser is unavailable in this host.")
         case "timeout": return qsTr("The Audio backend did not respond in time.")
         case "contract-invalid": return qsTr("The Audio backend returned an invalid contract.")
         case "backend-unavailable":
@@ -164,8 +166,8 @@ Item {
         }
     }
 
-    onVisibleChanged: if (visible) activate()
-    Component.onCompleted: if (visible) activate()
+    onActiveChanged: if (active) activate()
+    Component.onCompleted: if (active) activate()
 
     Connections {
         target: root.backend

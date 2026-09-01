@@ -90,7 +90,7 @@ assert [x['id'] for x in value['sections']]==['layers','audio','input','themes']
 assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections'])
 PY
 "$binary" sections --format text | grep -Fq $'audio\tAudio\taudio-card\tavailable'
-[[ $($binary --version) == 'synapse-settings 0.6.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 0.7.0-alpha.1' ]]
 "$binary" --help | grep -Fq 'synapse-settings audio policy set-rule'
 
 # Broker-status observation is independently read-only when no broker or policy

@@ -5,8 +5,9 @@ PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
+QMLDIR ?= $(LIBDIR)/qt6/qml
 BUILD_DIR ?= build
-VERSION := 0.6.0-alpha.1
+VERSION := 0.7.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -78,26 +79,59 @@ GUI_SOURCES := gui/main.cpp gui/audio_adapter.cpp gui/localization.cpp
 GUI_HEADERS := gui/audio_adapter.h gui/localization.h
 GUI_MOC := $(BUILD_DIR)/moc_audio_adapter.cpp $(BUILD_DIR)/moc_localization.cpp
 GUI_QML := gui/qml/Main.qml gui/qml/AudioSettings.qml \
-	gui/qml/AudioSettingsSection.qml
+	gui/qml/AudioSettingsSection.qml gui/qml/AudioShellHost.qml
 GUI_QM := $(BUILD_DIR)/i18n/synapse-settings_en_US.qm \
 	$(BUILD_DIR)/i18n/synapse-settings_it_IT.qm
 GUI_QRC_FILE := $(BUILD_DIR)/resources.qrc
 GUI_RCC := $(BUILD_DIR)/qrc_resources.cpp
+GUI_PLUGIN := $(BUILD_DIR)/libsynapse_settings_audio_qml.so
+GUI_PLUGIN_TEST := $(BUILD_DIR)/libsynapse_settings_audio_qml_test.so
+GUI_PLUGIN_SOURCES := gui/audio_qml_plugin.cpp gui/audio_adapter.cpp \
+	gui/localization.cpp gui/x86_64_baseline_note.cpp
+GUI_PLUGIN_HEADERS := gui/audio_qml_plugin.h gui/audio_adapter.h \
+	gui/localization.h
+GUI_PLUGIN_MOC := $(BUILD_DIR)/moc_audio_qml_plugin.cpp
+GUI_PLUGIN_QRC_FILE := $(BUILD_DIR)/audio_plugin_resources.qrc
+GUI_PLUGIN_RCC := $(BUILD_DIR)/qrc_audio_plugin_resources.cpp
+GUI_PLUGIN_LDFLAGS := -shared -Wl,-z,relro,-z,now
+GUI_MODULE_REL := Synapse/Settings/Audio
+GUI_MODULE_ROOT := $(BUILD_DIR)/qml
+GUI_MODULE_DIR := $(GUI_MODULE_ROOT)/$(GUI_MODULE_REL)
+GUI_MODULE_STAMP := $(GUI_MODULE_DIR)/.staged
+GUI_TEST_MODULE_ROOT := $(BUILD_DIR)/test-qml
+GUI_TEST_MODULE_DIR := $(GUI_TEST_MODULE_ROOT)/$(GUI_MODULE_REL)
+GUI_TEST_MODULE_STAMP := $(GUI_TEST_MODULE_DIR)/.staged
+GUI_MODULE_QMLTYPES := gui/qml-module/synapse-settings-audio.qmltypes
 GUI_TEST_MOC := $(BUILD_DIR)/test_audio_adapter.moc
 GUI_TEST_BINARY := $(BUILD_DIR)/test-audio-adapter
 ALL_TARGETS := $(BINARY) $(BROKER_BINARY)
 ifeq ($(GUI_ENABLED),1)
-ALL_TARGETS += $(GUI_BINARY)
+ALL_TARGETS += $(GUI_BINARY) $(GUI_PLUGIN)
 endif
 
-.PHONY: all cli broker gui clean test test-gui test-all install
+.PHONY: all cli broker gui qml-plugin qml-module clean test test-gui test-all install
 all: $(ALL_TARGETS)
 cli: $(BINARY)
 broker: $(BROKER_BINARY)
 
 gui:
 ifeq ($(GUI_ENABLED),1)
-	$(MAKE) --no-print-directory "$(GUI_BINARY)" BUILD_GUI=1
+	$(MAKE) --no-print-directory "$(GUI_BINARY)" "$(GUI_PLUGIN)" \
+		"$(GUI_MODULE_STAMP)" BUILD_GUI=1
+else
+	@echo "synapse-settings: Qt 6 GUI SDK unavailable" >&2; exit 1
+endif
+
+qml-plugin:
+ifeq ($(GUI_ENABLED),1)
+	$(MAKE) --no-print-directory "$(GUI_PLUGIN)" BUILD_GUI=1
+else
+	@echo "synapse-settings: Qt 6 GUI SDK unavailable" >&2; exit 1
+endif
+
+qml-module:
+ifeq ($(GUI_ENABLED),1)
+	$(MAKE) --no-print-directory "$(GUI_MODULE_STAMP)" BUILD_GUI=1
 else
 	@echo "synapse-settings: Qt 6 GUI SDK unavailable" >&2; exit 1
 endif
@@ -135,6 +169,9 @@ $(BUILD_DIR)/moc_audio_adapter.cpp: gui/audio_adapter.h | $(BUILD_DIR)
 $(BUILD_DIR)/moc_localization.cpp: gui/localization.h | $(BUILD_DIR)
 	"$(MOC6)" -f localization.h -o "$@" "$<"
 
+$(GUI_PLUGIN_MOC): gui/audio_qml_plugin.h | $(BUILD_DIR)
+	"$(MOC6)" -f audio_qml_plugin.h -o "$@" "$<"
+
 $(BUILD_DIR)/i18n/%.qm: gui/i18n/%.ts | $(BUILD_DIR)
 	install -d -m 0755 "$(BUILD_DIR)/i18n"
 	"$(LRELEASE6)" -silent -fail-on-unfinished -fail-on-invalid "$<" -qm "$@"
@@ -144,12 +181,22 @@ $(GUI_QRC_FILE): $(GUI_QML) $(GUI_QM) | $(BUILD_DIR)
 		'<file alias="qml/Main.qml">$(abspath gui/qml/Main.qml)</file>' \
 		'<file alias="qml/AudioSettings.qml">$(abspath gui/qml/AudioSettings.qml)</file>' \
 		'<file alias="qml/AudioSettingsSection.qml">$(abspath gui/qml/AudioSettingsSection.qml)</file>' \
+		'<file alias="qml/AudioShellHost.qml">$(abspath gui/qml/AudioShellHost.qml)</file>' \
 		'<file alias="i18n/synapse-settings_en_US.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_en_US.qm)</file>' \
 		'<file alias="i18n/synapse-settings_it_IT.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_it_IT.qm)</file>' \
 		'</qresource></RCC>' >"$@"
 
 $(GUI_RCC): $(GUI_QRC_FILE) | $(BUILD_DIR)
 	"$(RCC6)" -o "$@" "$<"
+
+$(GUI_PLUGIN_QRC_FILE): $(GUI_QM) | $(BUILD_DIR)
+	printf '%s\n' '<!DOCTYPE RCC><RCC version="1.0"><qresource prefix="/">' \
+		'<file alias="i18n/synapse-settings_en_US.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_en_US.qm)</file>' \
+		'<file alias="i18n/synapse-settings_it_IT.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_it_IT.qm)</file>' \
+		'</qresource></RCC>' >"$@"
+
+$(GUI_PLUGIN_RCC): $(GUI_PLUGIN_QRC_FILE) | $(BUILD_DIR)
+	"$(RCC6)" -name synapse_settings_audio_qml -o "$@" "$<"
 
 $(GUI_BINARY): $(GUI_SOURCES) $(GUI_HEADERS) $(GUI_MOC) $(GUI_RCC) $(BINARY) | $(BUILD_DIR)
 	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CXXFLAGS) $(CXXFLAGS) \
@@ -158,18 +205,61 @@ $(GUI_BINARY): $(GUI_SOURCES) $(GUI_HEADERS) $(GUI_MOC) $(GUI_RCC) $(BINARY) | $
 		$(GUI_SOURCES) $(GUI_MOC) $(GUI_RCC) $(BASE_LDFLAGS) \
 		$(LDFLAGS) $$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
 
+$(GUI_PLUGIN): $(GUI_PLUGIN_SOURCES) $(GUI_PLUGIN_HEADERS) \
+		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) | $(BUILD_DIR)
+	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CXXFLAGS) $(CXXFLAGS) \
+		$(REPRO_FLAGS) $(GUI_CXX_COMPAT) -Igui \
+		$$( $(PKG_CONFIG) --cflags $(GUI_PACKAGES) ) -o "$@" \
+		$(GUI_PLUGIN_SOURCES) $(GUI_MOC) $(GUI_PLUGIN_MOC) \
+		$(GUI_PLUGIN_RCC) $(GUI_PLUGIN_LDFLAGS) $(LDFLAGS) \
+		$$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
+
+$(GUI_PLUGIN_TEST): $(GUI_PLUGIN_SOURCES) $(GUI_PLUGIN_HEADERS) \
+		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) | $(BUILD_DIR)
+	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) \
+		-DSYNAPSE_SETTINGS_GUI_TEST_HOOKS=1 \
+		$(BASE_CXXFLAGS) $(CXXFLAGS) $(REPRO_FLAGS) $(GUI_CXX_COMPAT) \
+		-Igui $$( $(PKG_CONFIG) --cflags $(GUI_PACKAGES) ) -o "$@" \
+		$(GUI_PLUGIN_SOURCES) $(GUI_MOC) $(GUI_PLUGIN_MOC) \
+		$(GUI_PLUGIN_RCC) $(GUI_PLUGIN_LDFLAGS) $(LDFLAGS) \
+		$$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
+
+$(GUI_MODULE_STAMP): $(GUI_PLUGIN) $(GUI_QML) \
+		gui/qml-module/qmldir $(GUI_MODULE_QMLTYPES)
+	rm -rf "$(GUI_MODULE_DIR)"
+	install -d -m 0755 "$(GUI_MODULE_DIR)"
+	install -m 0755 "$(GUI_PLUGIN)" \
+		"$(GUI_MODULE_DIR)/libsynapse_settings_audio_qml.so"
+	install -m 0644 gui/qml-module/qmldir $(GUI_MODULE_QMLTYPES) \
+		gui/qml/AudioSettings.qml gui/qml/AudioSettingsSection.qml \
+		gui/qml/AudioShellHost.qml "$(GUI_MODULE_DIR)/"
+	touch "$@"
+
+$(GUI_TEST_MODULE_STAMP): $(GUI_PLUGIN_TEST) $(GUI_QML) \
+		gui/qml-module/qmldir $(GUI_MODULE_QMLTYPES)
+	rm -rf "$(GUI_TEST_MODULE_DIR)"
+	install -d -m 0755 "$(GUI_TEST_MODULE_DIR)"
+	install -m 0755 "$(GUI_PLUGIN_TEST)" \
+		"$(GUI_TEST_MODULE_DIR)/libsynapse_settings_audio_qml.so"
+	install -m 0644 gui/qml-module/qmldir $(GUI_MODULE_QMLTYPES) \
+		gui/qml/AudioSettings.qml gui/qml/AudioSettingsSection.qml \
+		gui/qml/AudioShellHost.qml "$(GUI_TEST_MODULE_DIR)/"
+	touch "$@"
+
 $(GUI_TEST_MOC): tests/test_audio_adapter.cpp | $(BUILD_DIR)
 	"$(MOC6)" -o "$@" "$<"
 
 $(GUI_TEST_BINARY): tests/test_audio_adapter.cpp gui/audio_adapter.cpp \
-		gui/audio_adapter.h $(BUILD_DIR)/moc_audio_adapter.cpp \
-		$(GUI_TEST_MOC) $(TEST_BINARY) | $(BUILD_DIR)
+		gui/audio_adapter.h gui/localization.cpp gui/localization.h \
+		$(BUILD_DIR)/moc_audio_adapter.cpp $(BUILD_DIR)/moc_localization.cpp \
+		$(GUI_PLUGIN_RCC) $(GUI_TEST_MOC) $(TEST_BINARY) | $(BUILD_DIR)
 	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_GUI_TEST_HOOKS=1 \
 		$(BASE_CXXFLAGS) $(CXXFLAGS) $(REPRO_FLAGS) $(GUI_CXX_COMPAT) \
 		$(GUI_TEST_COMPAT) -Igui -I$(BUILD_DIR) \
 		$$( $(PKG_CONFIG) --cflags $(GUI_TEST_PACKAGES) ) -o "$@" \
-		tests/test_audio_adapter.cpp gui/audio_adapter.cpp \
-		$(BUILD_DIR)/moc_audio_adapter.cpp $(BASE_LDFLAGS) $(LDFLAGS) \
+		tests/test_audio_adapter.cpp gui/audio_adapter.cpp gui/localization.cpp \
+		$(BUILD_DIR)/moc_audio_adapter.cpp $(BUILD_DIR)/moc_localization.cpp \
+		$(GUI_PLUGIN_RCC) $(BASE_LDFLAGS) $(LDFLAGS) \
 		$$( $(PKG_CONFIG) --libs $(GUI_TEST_PACKAGES) ) $(LDLIBS)
 
 test: $(TEST_BINARY) $(BROKER_TEST_BINARY)
@@ -179,11 +269,21 @@ test: $(TEST_BINARY) $(BROKER_TEST_BINARY)
 
 test-gui:
 ifeq ($(GUI_ENABLED),1)
-	$(MAKE) --no-print-directory "$(GUI_BINARY)" "$(GUI_TEST_BINARY)" BUILD_GUI=1
-	"$(QMLLINT)" gui/qml/*.qml tests/qml/*.qml
-	QT_QPA_PLATFORM=offscreen "$(QMLTESTRUNNER)" -input tests/qml
+	$(MAKE) --no-print-directory "$(GUI_BINARY)" "$(GUI_TEST_BINARY)" \
+		"$(GUI_MODULE_STAMP)" "$(GUI_TEST_MODULE_STAMP)" BUILD_GUI=1
+	"$(QMLLINT)" -I "$(GUI_MODULE_ROOT)" gui/qml/Main.qml \
+		gui/qml/AudioSettings.qml gui/qml/AudioSettingsSection.qml \
+		tests/qml/tst_settings_sections.qml
+	"$(QMLLINT)" -I "$(GUI_MODULE_ROOT)" "$(GUI_MODULE_DIR)"/*.qml \
+		tests/qml/tst_audio_module.qml
+	QT_QPA_PLATFORM=offscreen "$(QMLTESTRUNNER)" \
+		-input tests/qml/tst_settings_sections.qml
 	QT_QPA_PLATFORM=offscreen SYNAPSE_SETTINGS_TEST_BACKEND="$(abspath $(TEST_BINARY))" \
 		$(TEST_ENV) "$(GUI_TEST_BINARY)"
+	$(TEST_ENV) ./tests/qml-module-run.sh \
+		"$(abspath $(QMLTESTRUNNER))" "$(abspath $(GUI_TEST_MODULE_ROOT))" \
+		"$(abspath $(TEST_BINARY))"
+	./tests/qml-module-boundary.sh "$(GUI_MODULE_DIR)"
 	$(TEST_ENV) ./tests/gui-run.sh "$(abspath $(GUI_BINARY))" \
 		"$(abspath $(TEST_BINARY))"
 else
@@ -201,6 +301,18 @@ install: $(ALL_TARGETS)
 ifeq ($(GUI_ENABLED),1)
 	install -D -m 0755 "$(GUI_BINARY)" \
 		"$(DESTDIR)$(BINDIR)/synapse-settings-gui"
+	install -D -m 0755 "$(GUI_PLUGIN)" \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/libsynapse_settings_audio_qml.so"
+	install -D -m 0644 gui/qml-module/qmldir \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/qmldir"
+	install -D -m 0644 "$(GUI_MODULE_QMLTYPES)" \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/synapse-settings-audio.qmltypes"
+	install -D -m 0644 gui/qml/AudioSettings.qml \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/AudioSettings.qml"
+	install -D -m 0644 gui/qml/AudioSettingsSection.qml \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/AudioSettingsSection.qml"
+	install -D -m 0644 gui/qml/AudioShellHost.qml \
+		"$(DESTDIR)$(QMLDIR)/$(GUI_MODULE_REL)/AudioShellHost.qml"
 	install -D -m 0644 data/org.synapse.Settings.desktop \
 		"$(DESTDIR)$(DATADIR)/applications/org.synapse.Settings.desktop"
 endif

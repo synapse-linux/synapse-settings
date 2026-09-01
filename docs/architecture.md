@@ -20,7 +20,39 @@ adapter-to-core invocation.
 
 The standalone GUI is also a portability boundary: feature QML imports Qt Quick
 rather than Quickshell modules. The same QML and adapter can therefore be hosted
-by a future Synapse shell without changing the Audio contracts.
+by a Synapse shell without changing the Audio contracts.
+
+## Reusable QML module boundary
+
+Alpha 7 packages `AudioSettings.qml`, `AudioSettingsSection.qml` and
+`AudioShellHost.qml` as `Synapse.Settings.Audio` beside a Qt extension plugin.
+The plugin registers one engine-owned `AudioBackend` singleton and initializes
+package-owned translations. The production singleton always targets
+`/usr/bin/synapse-settings`; only the separately compiled test plugin recognizes
+the bounded fixture backend override. Because a shared object does not receive
+an executable startup note, `x86_64_baseline_note.cpp` publishes the plugin's
+GNU baseline ISA property explicitly; `-march=x86-64 -mtune=generic` remains
+the code-generation authority.
+
+`AudioShellHost` exposes readiness, availability, busy state, broker activity,
+enforcement availability and bounded status/reason/error identifiers. It does
+not expose models containing private process data, the backend executable path,
+raw JSON, PipeWire names, acknowledgements, cohorts, argv, environment or IPC
+frames. The existing feature QML receives the same typed adapter as the
+standalone application and remains free of Quickshell imports.
+
+The host sets an explicit `active` boolean. Activation lazily creates the Audio
+section and starts the read-only inventory-policy-broker-status load. Hiding the
+section releases its presentation objects without adding ambient mutation or
+reconciliation; the typed singleton remains single-flight. A host that offers
+native executable/directory dialogs must run as `QApplication`. If it does not,
+the adapter returns the typed `native-dialog-unavailable` presentation error
+without invoking a backend operation.
+
+Unknown, missing or malformed GUI locale requests fall back to embedded
+`en_US`. The current source candidate still has only `en_US` and `it_IT`
+catalogues; the other pinned GUI catalogues remain a release blocker rather
+than an implied completion claim.
 
 ## Adapter transaction boundary
 

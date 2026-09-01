@@ -63,6 +63,8 @@ bool decodeRouteReceipt(const QByteArray &payload,
 class AudioAdapter final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool audioBusy READ audioBusy NOTIFY audioStateChanged)
+  Q_PROPERTY(
+      bool audioSnapshotReady READ audioSnapshotReady NOTIFY audioModelsChanged)
   Q_PROPERTY(bool audioAvailable READ audioAvailable NOTIFY audioModelsChanged)
   Q_PROPERTY(QString audioReason READ audioReason NOTIFY audioModelsChanged)
   Q_PROPERTY(
@@ -94,12 +96,14 @@ class AudioAdapter final : public QObject {
 public:
   using PathChooser = std::function<QString(const QString &matchType)>;
 
+  explicit AudioAdapter(QObject *parent = nullptr);
   explicit AudioAdapter(QString backendPath, QObject *parent = nullptr);
   AudioAdapter(QString backendPath, PathChooser pathChooser,
                int commandTimeoutMilliseconds, QObject *parent = nullptr);
   ~AudioAdapter() override;
 
   bool audioBusy() const;
+  bool audioSnapshotReady() const;
   bool audioAvailable() const;
   QString audioReason() const;
   QVariantList audioOutputs() const;
@@ -189,6 +193,7 @@ private:
   QString errorId_;
   int commandTimeoutMilliseconds_ = 15000;
   bool busy_ = false;
+  bool snapshotReady_ = false;
   bool processChoiceOpen_ = false;
 };
 

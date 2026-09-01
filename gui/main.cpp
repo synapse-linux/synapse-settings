@@ -26,7 +26,7 @@
 #include <sys/prctl.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.6.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.7.0-alpha.1"
 #endif
 
 namespace {
@@ -85,7 +85,8 @@ int main(int argc, char **argv) {
   parser.addVersionOption();
   const QCommandLineOption localeOption(
       QStringLiteral("locale"),
-      QStringLiteral("Managed GUI locale (en_US or it_IT)."),
+      QStringLiteral(
+          "Managed GUI locale (unavailable catalogs fall back to en_US)."),
       QStringLiteral("locale"));
   const QCommandLineOption testExitOption(
       QStringLiteral("test-exit-after-load"),

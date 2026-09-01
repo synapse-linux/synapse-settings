@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio_adapter.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -35,6 +36,20 @@ constexpr char kRouteAcknowledgement[] =
     "synapse-settings/audio-route-policy/v1";
 constexpr char kStreamMoveAcknowledgement[] =
     "synapse-settings/audio-existing-stream-move/v1";
+
+QString defaultBackendPath() {
+#ifdef SYNAPSE_SETTINGS_GUI_TEST_HOOKS
+  const QByteArray overridePath = qgetenv("SYNAPSE_SETTINGS_TEST_BACKEND");
+  if (!overridePath.isEmpty() && overridePath.size() < 4096 &&
+      !overridePath.contains('\0')) {
+    const QFileInfo candidate(QString::fromUtf8(overridePath));
+    if (candidate.isAbsolute() && candidate.isFile() &&
+        candidate.isExecutable())
+      return candidate.canonicalFilePath();
+  }
+#endif
+  return QStringLiteral("/usr/bin/synapse-settings");
+}
 
 bool fail(QString *errorId, const QString &value) {
   if (errorId)
@@ -981,6 +996,9 @@ private:
   bool finished_ = false;
 };
 
+AudioAdapter::AudioAdapter(QObject *parent)
+    : AudioAdapter(defaultBackendPath(), parent) {}
+
 AudioAdapter::AudioAdapter(QString backendPath, QObject *parent)
     : AudioAdapter(std::move(backendPath), PathChooser(), 15000, parent) {}
 
@@ -1006,6 +1024,7 @@ AudioAdapter::~AudioAdapter() {
 }
 
 bool AudioAdapter::audioBusy() const { return busy_; }
+bool AudioAdapter::audioSnapshotReady() const { return snapshotReady_; }
 bool AudioAdapter::audioAvailable() const { return snapshot_.available; }
 QString AudioAdapter::audioReason() const { return snapshot_.reason; }
 QVariantList AudioAdapter::audioOutputs() const { return snapshot_.outputs; }
@@ -1164,6 +1183,7 @@ void AudioAdapter::publishSnapshot(AudioPresentationSnapshot snapshot,
                                    const QString &successStatusId,
                                    const QString &operationErrorId) {
   snapshot_ = std::move(snapshot);
+  snapshotReady_ = true;
   emit audioModelsChanged();
   setBusy(false);
   setMessage(successStatusId, operationErrorId);
@@ -1175,6 +1195,7 @@ void AudioAdapter::publishSnapshot(AudioPresentationSnapshot snapshot,
 void AudioAdapter::failLoad(const QString &errorId) {
   snapshot_ = AudioPresentationSnapshot();
   snapshot_.reason = errorId;
+  snapshotReady_ = false;
   emit audioModelsChanged();
   setBusy(false);
   setMessage(QString(), errorId);
@@ -1515,6 +1536,10 @@ bool AudioAdapter::choosePathRule(const QString &matchType,
 }
 
 QString AudioAdapter::defaultChoosePath(const QString &matchType) {
+  if (!qobject_cast<QApplication *>(QCoreApplication::instance())) {
+    setMessage(QString(), QStringLiteral("native-dialog-unavailable"));
+    return {};
+  }
   QFileDialog dialog;
   dialog.setDirectory(QDir::homePath());
   dialog.setOption(QFileDialog::DontUseCustomDirectoryIcons, true);

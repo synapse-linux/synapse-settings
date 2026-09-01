@@ -1,0 +1,89 @@
+import QtQuick.tooling 1.2
+
+// This file describes the plugin-supplied types contained in the library.
+// It is used for QML tooling purposes only. The checked-in description is
+// generated from Synapse.Settings.Audio 1.0 and contains no build paths.
+
+Module {
+    Component {
+        name: "AudioAdapter"
+        prototype: "QObject"
+        exports: ["AudioBackend 1.0"]
+        isCreatable: false
+        isSingleton: true
+        Property { name: "audioBusy"; type: "bool"; isReadonly: true }
+        Property { name: "audioSnapshotReady"; type: "bool"; isReadonly: true }
+        Property { name: "audioAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioReason"; type: "string"; isReadonly: true }
+        Property { name: "audioOutputs"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioInputs"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioStreams"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioCards"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioRouteRules"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioRouteBrokerAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioRouteBrokerActive"; type: "bool"; isReadonly: true }
+        Property { name: "audioRouteBrokerReason"; type: "string"; isReadonly: true }
+        Property { name: "audioRouteEnforcementAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioProcessChoices"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioProcessChoiceOpen"; type: "bool"; isReadonly: true }
+        Property { name: "audioStatusId"; type: "string"; isReadonly: true }
+        Property { name: "audioErrorId"; type: "string"; isReadonly: true }
+        Signal { name: "audioStateChanged" }
+        Signal { name: "audioModelsChanged" }
+        Signal { name: "audioProcessChoiceChanged" }
+        Signal { name: "audioOperationStateChanged" }
+        Signal { name: "audioProcessChoiceRequested" }
+        Signal {
+            name: "audioLoaded"
+            Parameter { name: "success"; type: "bool" }
+        }
+        Signal {
+            name: "audioOperationFinished"
+            Parameter { name: "statusId"; type: "string" }
+        }
+        Method { name: "loadAudio"; type: "bool" }
+        Method {
+            name: "setAudioDefault"
+            type: "bool"
+            Parameter { name: "direction"; type: "string" }
+            Parameter { name: "deviceId"; type: "string" }
+        }
+        Method {
+            name: "moveAudioStream"
+            type: "bool"
+            Parameter { name: "streamId"; type: "string" }
+            Parameter { name: "originalDeviceId"; type: "string" }
+            Parameter { name: "requestedDeviceId"; type: "string" }
+        }
+        Method {
+            name: "chooseAudioProcessRule"
+            type: "bool"
+            Parameter { name: "direction"; type: "string" }
+            Parameter { name: "deviceId"; type: "string" }
+        }
+        Method {
+            name: "confirmAudioProcessRule"
+            type: "bool"
+            Parameter { name: "streamId"; type: "string" }
+        }
+        Method { name: "cancelAudioProcessRule" }
+        Method {
+            name: "chooseAudioExecutableRule"
+            type: "bool"
+            Parameter { name: "direction"; type: "string" }
+            Parameter { name: "deviceId"; type: "string" }
+        }
+        Method {
+            name: "chooseAudioDirectoryRule"
+            type: "bool"
+            Parameter { name: "direction"; type: "string" }
+            Parameter { name: "deviceId"; type: "string" }
+        }
+        Method {
+            name: "removeAudioRouteRule"
+            type: "bool"
+            Parameter { name: "ruleId"; type: "string" }
+        }
+        Method { name: "clearAudioMessage" }
+    }
+}

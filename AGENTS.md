@@ -48,3 +48,10 @@
   verifies same-UID peers and exposes no mutation operation or raw provider state.
 - Pass strict GCC/Clang, ASan/UBSan, analyzers, malformed policy, subprocess
   timeout, broker race/failure, schema, QML, exact-ISA and reproducibility tests.
+- The `Synapse.Settings.Audio` module reuses the typed adapter and host-neutral
+  feature QML. Its production singleton targets only
+  `/usr/bin/synapse-settings`; fixture selection belongs only to a separately
+  compiled test plugin.
+- Shell-facing Audio state is limited to bounded booleans and typed identifiers.
+  Loading the module is read-only and never waives the independent installation,
+  activation, default, policy, stream-movement or deployment gates.

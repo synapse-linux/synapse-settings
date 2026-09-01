@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
-gui=${1:?GUI binary required}
-backend=${2:?test backend required}
+qmltestrunner=${1:?qmltestrunner required}
+module_root=${2:?QML module root required}
+backend=${3:?test backend required}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-install -d -m 0755 "$work/stage" "$work/audio" "$work/config"
+install -d -m 0755 "$work/audio" "$work/config" "$work/cache"
 install -d -m 0700 "$work/runtime"
-install -m 0755 "$gui" "$work/stage/synapse-settings-gui"
-install -m 0755 "$backend" "$work/stage/synapse-settings"
 cat >"$work/audio/sinks.json" <<'JSON'
 [{"index":10,"name":"sink.a","description":"Integrated audio","mute":false,"volume":{"left":{"value":32768}}}]
 JSON
@@ -39,30 +38,27 @@ SH
 chmod 755 "$work/pactl-fake"
 
 for locale in en_US it_IT; do
-  screenshot="$work/$locale.png"
-  env QT_QPA_PLATFORM=offscreen HOME="$work" XDG_CONFIG_HOME="$work/config" \
-    XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_PACTL="$work/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$work/audio" \
-    SYNAPSE_AUDIO_ROUTE_POLICY="$work/config/audio-route-policy-v1.json" \
-    "$work/stage/synapse-settings-gui" --locale "$locale" \
-      --test-exit-after-load --test-ready-timeout 10000 \
-      --test-window-size 900x640 --test-screenshot "$screenshot" \
-      >"$work/$locale.stdout" 2>"$work/$locale.stderr"
-  test -s "$screenshot"
-  file "$screenshot" | grep -Fq 'PNG image data'
-  if grep -Eiq 'qml=|binding loop|referenceerror|typeerror' "$work/$locale.stderr"; then
+  if ! env LC_ALL="${locale}.utf8" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+      HOME="$work" XDG_CONFIG_HOME="$work/config" XDG_CACHE_HOME="$work/cache" \
+      XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_SETTINGS_TEST_BACKEND="$backend" \
+      SYNAPSE_PACTL="$work/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$work/audio" \
+      SYNAPSE_AUDIO_ROUTE_POLICY="$work/config/audio-route-policy-v1.json" \
+      "$qmltestrunner" -import "$module_root" \
+        -input tests/qml/tst_audio_module.qml \
+        -o "$work/${locale}.log,txt" >"$work/${locale}.stdout" \
+        2>"$work/${locale}.stderr"; then
+    cat "$work/${locale}.stdout" "$work/${locale}.stderr" \
+      "$work/${locale}.log" >&2
     exit 1
   fi
-  grep -Fq 'audio=validated renderer=software' "$work/$locale.stderr"
+  grep -Fq '0 failed' "$work/${locale}.log"
+  if grep -Eiq 'module .* is not installed|plugin cannot be loaded|referenceerror|typeerror|binding loop' \
+      "$work/${locale}.stderr"; then
+    cat "$work/${locale}.stderr" >&2
+    exit 1
+  fi
 done
 
-env QT_QPA_PLATFORM=offscreen HOME="$work" XDG_CONFIG_HOME="$work/config" \
-  XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_PACTL="$work/pactl-fake" \
-  SYNAPSE_AUDIO_FIXTURES="$work/audio" \
-  SYNAPSE_AUDIO_ROUTE_POLICY="$work/config/audio-route-policy-v1.json" \
-  "$work/stage/synapse-settings-gui" --locale zz_INVALID \
-    --test-exit-after-load --test-ready-timeout 10000 \
-    >"$work/fallback.stdout" 2>"$work/fallback.stderr"
-grep -Fq 'audio=validated renderer=software' "$work/fallback.stderr"
-
 test ! -e "$work/config/audio-route-policy-v1.json"
-printf 'synapse-settings GUI adapter and fallback smoke: PASS\n'
+test -z "$(find "$work/runtime" -mindepth 1 -print -quit)"
+printf 'synapse-settings Audio QML module smoke: PASS\n'

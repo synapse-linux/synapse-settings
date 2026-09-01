@@ -1,11 +1,13 @@
 # Synapse Settings
 
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 6 adds an independently acknowledged,
-one-stream existing-stream move transaction with exact postflight and bounded
-rollback. Audio policy, PipeWire authority, private cohort data and
-acknowledgements remain outside QML. Installation, broker activation and live
-qualification remain later deployment gates.
+new-stream Audio route broker. Alpha 7 packages the already typed Audio adapter
+and host-neutral QML as `Synapse.Settings.Audio`, ready for an optional shell
+host without moving policy, PipeWire authority, private cohort data or
+acknowledgements into QML. The independently acknowledged one-stream move from
+Alpha 6 retains exact postflight and bounded rollback. Installation, shell
+replacement, broker activation and live qualification remain later deployment
+gates.
 
 ```bash
 make CORE_ROOT=/path/to/staged-core clean all test-all
@@ -17,7 +19,13 @@ build/synapse-settings audio policy show --format json
 build/synapse-settings audio resolve --path /canonical/application --direction output --format json
 build/synapse-audio-route-broker --probe --format json
 build/synapse-settings-gui --locale it_IT
+make qml-module
 ```
+
+The reusable module stages under
+`build/qml/Synapse/Settings/Audio`. A production install places the module under
+the configured Qt 6 QML directory, but building or testing it does not install
+or activate anything.
 
 Audio capabilities in this slice:
 
@@ -30,7 +38,9 @@ Audio capabilities in this slice:
 - deterministic precedence: exact executable, longest matching directory, then
   the current system default;
 - native executable/directory chooser owned by the trusted Qt adapter;
-- lazy standalone QML host with provisional `en_US` and `it_IT` catalogues;
+- lazy standalone QML host and reusable `Synapse.Settings.Audio` module with
+  provisional `en_US` and `it_IT` catalogues and deterministic `en_US`
+  fallback;
 - a bounded broker for new playback and recording streams created after its
   startup baseline;
 - typed broker status and per-event receipts with no PID, executable path or raw
@@ -41,7 +51,10 @@ Audio capabilities in this slice:
   same-identity postflight and exact-original rollback when safe;
 - an explicit Qt confirmation surface that never creates a durable rule;
 - strict contract decoding, bounded output, bounded execution and single-flight
-  GUI operations.
+  GUI operations;
+- a shell-facing `AudioShellHost` that publishes only bounded typed booleans and
+  reason/status identifiers, never raw JSON, process paths, endpoint internals,
+  acknowledgements, cohorts, argv or environments.
 
 Durable rules never persist PIDs. The C backend maps an opaque Audio stream to a
 same-UID canonical executable and privately pins its process start time. Before a
@@ -59,8 +72,8 @@ opaque cohort, requires the exact original endpoint and acknowledgement, repeats
 preflight, and returns a dedicated receipt. No persistent rule is created.
 
 `make install` stages a hardened systemd user unit but does not enable or start
-it. The current source candidate was not installed, enabled or run against live
-Audio. Existing-stream planning and movement were exercised only through the
+it. The current source candidate and QML module were not installed, enabled or run
+against live Audio. Existing-stream planning and movement were exercised only through the
 compile-time test `pactl` override; no live stream was moved. Fixture tests cover successful playback and recording moves, every reachable
 typed preflight refusal, stale cohorts, wrong original targets, endpoint drift,
 timeouts, false backend success, stream and identity loss, unavailable
