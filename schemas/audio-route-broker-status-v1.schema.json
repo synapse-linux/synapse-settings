@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-route-broker-status-v1.schema.json",
+  "title": "Synapse Settings audio route broker status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "mode", "stateAuthority", "capable", "active", "enforcementAvailable", "reason", "policyGeneration", "baselineStreams", "persistentPidRules", "existingStreamMigration", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-route-broker-status/v1"},
+    "status": {"enum": ["Ready", "Unavailable"]},
+    "mode": {"const": "new-streams-only"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "capable": {"const": true},
+    "active": {"type": "boolean"},
+    "enforcementAvailable": {"type": "boolean"},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["broker-not-running", "audio-unavailable", "unavailable", "timeout", "invalid-response", "stream-limit", "policy-unavailable", "subscriber-unavailable", "subscriber-ended", "invalid-subscriber-event", "broker-internal-error"]}
+      ]
+    },
+    "policyGeneration": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "baselineStreams": {"type": "integer", "minimum": 0, "maximum": 128},
+    "persistentPidRules": {"const": false},
+    "existingStreamMigration": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"active": {"const": true}}, "required": ["active"]},
+      "then": {
+        "properties": {
+          "status": {"const": "Ready"},
+          "enforcementAvailable": {"const": true},
+          "reason": {"type": "null"}
+        }
+      },
+      "else": {"properties": {"enforcementAvailable": {"const": false}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "Ready"}, "active": {"const": false}}, "required": ["status", "active"]},
+      "then": {"properties": {"reason": {"const": "broker-not-running"}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "Unavailable"}}, "required": ["status"]},
+      "then": {"properties": {"active": {"const": false}, "reason": {"type": "string"}}}
+    }
+  ]
+}

@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.3.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.4.0-alpha.1"
 #endif
 
 typedef struct {

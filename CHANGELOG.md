@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0-alpha.1
+
+- Add a separate first-party C11 Audio route broker for post-baseline new
+  playback and recording streams.
+- Establish the active-stream baseline after subscriber startup so broker start
+  and restart never migrate an existing stream.
+- Resolve each unseen stream from a fresh same-UID executable identity and fresh
+  policy generation; exact executable still precedes longest directory prefix.
+- Revalidate PID start time, executable, endpoint cohort and policy before a
+  fixed `move-sink-input` or `move-source-output` transaction.
+- Claim routing only after post-move target verification; compensate a proven
+  partial failure back to the exact original endpoint when it remains available.
+- Handle duplicate events, vanished streams, missing processes, endpoint loss,
+  policy errors, command timeout and verification failure without success
+  claims.
+- Add strict broker status/receipt contracts and a hardened, disabled-by-default
+  systemd user service source.
+- Keep existing-stream migration, service activation, package installation and
+  live qualification behind separate gates.
+
 ## 0.3.0-alpha.1
 
 - Add a standalone lazy Qt Quick Audio Settings host.

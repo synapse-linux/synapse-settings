@@ -31,5 +31,6 @@ to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
 and republishes only a complete inventory-plus-policy cohort. Policy persistence
-still does not imply stream movement; the future Audio route broker owns
-PipeWire observation and enforcement.
+still does not imply stream movement. The separate Alpha 4 C11 broker owns
+new-stream observation and enforcement, but service activation and typed runtime
+status integration are not part of the GUI candidate.

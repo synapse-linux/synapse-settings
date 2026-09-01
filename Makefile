@@ -6,7 +6,7 @@ BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 BUILD_DIR ?= build
-VERSION := 0.3.0-alpha.1
+VERSION := 0.4.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -67,8 +67,11 @@ GUI_ENABLED := $(GUI_DEPS_AVAILABLE)
 endif
 
 SOURCES := src/synapse_settings.c src/audio.c src/audio_policy.c
+BROKER_SOURCES := src/audio_broker.c src/audio.c src/audio_policy.c
 BINARY := $(BUILD_DIR)/synapse-settings
 TEST_BINARY := $(BUILD_DIR)/synapse-settings-test
+BROKER_BINARY := $(BUILD_DIR)/synapse-audio-route-broker
+BROKER_TEST_BINARY := $(BUILD_DIR)/synapse-audio-route-broker-test
 GUI_BINARY := $(BUILD_DIR)/synapse-settings-gui
 GUI_SOURCES := gui/main.cpp gui/audio_adapter.cpp gui/localization.cpp
 GUI_HEADERS := gui/audio_adapter.h gui/localization.h
@@ -81,14 +84,15 @@ GUI_QRC_FILE := $(BUILD_DIR)/resources.qrc
 GUI_RCC := $(BUILD_DIR)/qrc_resources.cpp
 GUI_TEST_MOC := $(BUILD_DIR)/test_audio_adapter.moc
 GUI_TEST_BINARY := $(BUILD_DIR)/test-audio-adapter
-ALL_TARGETS := $(BINARY)
+ALL_TARGETS := $(BINARY) $(BROKER_BINARY)
 ifeq ($(GUI_ENABLED),1)
 ALL_TARGETS += $(GUI_BINARY)
 endif
 
-.PHONY: all cli gui clean test test-gui test-all install
+.PHONY: all cli broker gui clean test test-gui test-all install
 all: $(ALL_TARGETS)
 cli: $(BINARY)
+broker: $(BROKER_BINARY)
 
 gui:
 ifeq ($(GUI_ENABLED),1)
@@ -110,6 +114,18 @@ $(TEST_BINARY): $(SOURCES) src/settings_internal.h | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_TEST_HOOKS=1 \
 		$(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) $(CORE_CFLAGS) \
 		$(JSON_C_CFLAGS) -o "$@" $(SOURCES) $(BASE_LDFLAGS) \
+		$(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
+
+$(BROKER_BINARY): $(BROKER_SOURCES) src/settings_internal.h | $(BUILD_DIR)
+	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) \
+		$(REPRO_FLAGS) $(CORE_CFLAGS) $(JSON_C_CFLAGS) -o "$@" \
+		$(BROKER_SOURCES) $(BASE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) \
+		$(JSON_C_LIBS) $(LDLIBS)
+
+$(BROKER_TEST_BINARY): $(BROKER_SOURCES) src/settings_internal.h | $(BUILD_DIR)
+	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_TEST_HOOKS=1 \
+		$(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) $(CORE_CFLAGS) \
+		$(JSON_C_CFLAGS) -o "$@" $(BROKER_SOURCES) $(BASE_LDFLAGS) \
 		$(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
 
 $(BUILD_DIR)/moc_audio_adapter.cpp: gui/audio_adapter.h | $(BUILD_DIR)
@@ -155,8 +171,10 @@ $(GUI_TEST_BINARY): tests/test_audio_adapter.cpp gui/audio_adapter.cpp \
 		$(BUILD_DIR)/moc_audio_adapter.cpp $(BASE_LDFLAGS) $(LDFLAGS) \
 		$$( $(PKG_CONFIG) --libs $(GUI_TEST_PACKAGES) ) $(LDLIBS)
 
-test: $(TEST_BINARY)
+test: $(TEST_BINARY) $(BROKER_TEST_BINARY)
 	$(TEST_ENV) ./tests/run.sh "$(abspath $(TEST_BINARY))"
+	$(TEST_ENV) ./tests/broker-run.sh "$(abspath $(TEST_BINARY))" \
+		"$(abspath $(BROKER_TEST_BINARY))"
 
 test-gui:
 ifeq ($(GUI_ENABLED),1)
@@ -175,6 +193,10 @@ test-all: test test-gui
 
 install: $(ALL_TARGETS)
 	install -D -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/synapse-settings"
+	install -D -m 0755 "$(BROKER_BINARY)" \
+		"$(DESTDIR)$(BINDIR)/synapse-audio-route-broker"
+	install -D -m 0644 data/synapse-audio-route-broker.service \
+		"$(DESTDIR)$(LIBDIR)/systemd/user/synapse-audio-route-broker.service"
 ifeq ($(GUI_ENABLED),1)
 	install -D -m 0755 "$(GUI_BINARY)" \
 		"$(DESTDIR)$(BINDIR)/synapse-settings-gui"

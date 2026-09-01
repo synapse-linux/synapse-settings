@@ -534,6 +534,66 @@ static int path_is_within(const char *path, const char *directory) {
   return path[length] == '/' || path[length] == '\0';
 }
 
+int settings_audio_route_policy_state(unsigned *generation, int *present) {
+  if (!generation || !present) {
+    errno = EINVAL;
+    return -1;
+  }
+  audio_route_policy policy;
+  if (load_policy(&policy, present) != 0)
+    return -1;
+  *generation = policy.generation;
+  return 0;
+}
+
+int settings_audio_route_select(const char *canonical_path,
+                                const char *direction,
+                                settings_audio_route_selection *selection) {
+  if (!canonical_path || !direction || !selection ||
+      !normalized_policy_path(canonical_path) || !direction_valid(direction)) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(selection, 0, sizeof(*selection));
+  audio_route_policy policy;
+  if (load_policy(&policy, &selection->present) != 0)
+    return -1;
+  selection->generation = policy.generation;
+  const audio_route_rule *selected = NULL;
+  size_t selected_length = 0;
+  for (size_t i = 0; i < policy.rule_count; i++) {
+    const audio_route_rule *rule = &policy.rules[i];
+    if (!rule->enabled || strcmp(rule->direction, direction) != 0)
+      continue;
+    if (strcmp(rule->type, "executable") == 0 &&
+        strcmp(rule->path, canonical_path) == 0) {
+      selected = rule;
+      break;
+    }
+    if (strcmp(rule->type, "directory") == 0 &&
+        path_is_within(canonical_path, rule->path)) {
+      size_t length = strlen(rule->path);
+      if (!selected || length > selected_length) {
+        selected = rule;
+        selected_length = length;
+      }
+    }
+  }
+  selection->matched = selected != NULL;
+  const char *source = !selected ? "system-default"
+                       : strcmp(selected->type, "executable") == 0
+                           ? "exact-executable"
+                           : "directory-prefix";
+  if (copy_text(selection->source, sizeof(selection->source), source) != 0)
+    return -1;
+  if (selected &&
+      (copy_text(selection->device, sizeof(selection->device),
+                 selected->device) != 0 ||
+       copy_text(selection->rule, sizeof(selection->rule), selected->id) != 0))
+    return -1;
+  return 0;
+}
+
 static unsigned next_rule_number(const audio_route_policy *policy) {
   unsigned maximum = 0;
   for (size_t i = 0; i < policy->rule_count; i++) {
@@ -686,44 +746,20 @@ static int resolve_policy(int argc, char **argv) {
     fputs("synapse-settings: executable path cannot be resolved\n", stderr);
     return 1;
   }
-  audio_route_policy policy;
-  int present = 0;
-  if (load_policy(&policy, &present) != 0) {
+  settings_audio_route_selection selection;
+  if (settings_audio_route_select(resolved, direction, &selection) != 0) {
     fputs("synapse-settings: invalid audio route policy\n", stderr);
     return 1;
-  }
-  const audio_route_rule *selected = NULL;
-  size_t selected_length = 0;
-  for (size_t i = 0; i < policy.rule_count; i++) {
-    const audio_route_rule *rule = &policy.rules[i];
-    if (!rule->enabled || strcmp(rule->direction, direction) != 0)
-      continue;
-    if (strcmp(rule->type, "executable") == 0 &&
-        strcmp(rule->path, resolved) == 0) {
-      selected = rule;
-      break;
-    }
-    if (strcmp(rule->type, "directory") == 0 &&
-        path_is_within(resolved, rule->path)) {
-      size_t length = strlen(rule->path);
-      if (!selected || length > selected_length) {
-        selected = rule;
-        selected_length = length;
-      }
-    }
   }
   char device[32];
   int available = 0;
   if (settings_audio_policy_target(direction,
-                                   selected ? selected->device : NULL, device,
-                                   sizeof(device), &available) != 0) {
+                                   selection.matched ? selection.device : NULL,
+                                   device, sizeof(device), &available) != 0) {
     fputs("synapse-settings: audio inventory unavailable\n", stderr);
     return 1;
   }
-  const char *source = selected ? (strcmp(selected->type, "executable") == 0
-                                       ? "exact-executable"
-                                       : "directory-prefix")
-                                : "system-default";
+  const char *source = selection.source;
   if (strcmp(format, "json") != 0) {
     printf("Selected %s: %s (%s, %s)\n", direction,
            *device ? device : "unavailable", source,
@@ -740,8 +776,9 @@ static int resolve_policy(int argc, char **argv) {
                                  : json_object_new_null());
   json_object_object_add(root, "source", json_object_new_string(source));
   json_object_object_add(root, "rule",
-                         selected ? json_object_new_string(selected->id)
-                                  : json_object_new_null());
+                         selection.matched
+                             ? json_object_new_string(selection.rule)
+                             : json_object_new_null());
   json_object_object_add(root, "available", json_object_new_boolean(available));
   json_object_object_add(root, "enforcementAvailable",
                          json_object_new_boolean(0));

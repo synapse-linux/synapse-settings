@@ -8,8 +8,9 @@
    execution, strict contract decoding, native path choosers and publication of
    bounded presentation projections.
 3. Lazy QML renders only those projections and invokes fixed adapter methods.
-4. A future first-party Audio route broker will own PipeWire stream observation
-   and enforcement.
+4. `synapse-audio-route-broker` is a separate C11 process that owns bounded
+   PipeWire-Pulse observation and new-stream enforcement. Its user service is
+   staged but never enabled automatically.
 
 No lower layer delegates authority upward. QML never sees raw JSON, PipeWire node
 names, PIDs, command lines, environments, acknowledgements or backend argv. A
@@ -67,9 +68,33 @@ Audio stream, the C backend privately parses its process ID, pins the same-UID
 `/proc/PID` directory, resolves its executable, and persists only that canonical
 path. Persisted PIDs and process-name matching are excluded.
 
-## Honest enforcement boundary
+## New-stream broker boundary
 
-Policy storage and resolution do not imply stream movement. Until the route
-broker has an independently reviewed typed contract, all policy contracts expose
-`enforcementAvailable=false`, reason `audio-route-broker-not-integrated`, and
-receipts expose `routingApplied=false`.
+The Alpha 4 broker subscribes through fixed production `/usr/bin/pactl
+subscribe`, establishes a bounded baseline after starting the subscriber, and
+acts only on unseen `new` events for sink inputs or source outputs. Baseline
+streams are never moved. Remove events retire tracked identities; duplicate and
+change events are inert. Broker restart, policy changes and endpoint hotplug do
+not migrate active streams.
+
+For each unseen event, C11 reloads the stream, privately pins its same-UID
+process and `/proc/PID/stat` start time, resolves the canonical executable, loads
+the current policy generation, and reloads the stream and endpoint cohort. A
+fixed `move-sink-input` or `move-source-output` argv is issued only for an
+explicit exact-executable or directory-prefix rule with both current and target
+endpoints available. System-default resolution performs no move.
+
+A receipt reports `routingApplied=true` only when the command succeeds and a
+fresh postflight proves the same process instance on the selected opaque target.
+A command that reports failure after reaching the target is compensated to the
+exact original endpoint when the same identity remains provable. Vanished or
+changed identities, unavailable targets, timeout and unverifiable state never
+produce a success claim. Receipts contain no PID, executable path, raw endpoint
+or subscriber text.
+
+The service unit restricts address families to AF_UNIX and applies user-service
+hardening, but installation, enablement, startup and live qualification remain
+separate gates. Existing-stream movement is absent. Policy view/receipt v1 still
+reports `audio-route-broker-not-integrated` because it describes the currently
+inactive Settings runtime, not source capability; runtime status integration
+requires a versioned follow-up contract.

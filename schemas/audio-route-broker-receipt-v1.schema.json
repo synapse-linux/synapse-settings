@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-route-broker-receipt-v1.schema.json",
+  "title": "Synapse Settings new-stream Audio route broker receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "reason", "mode", "stateAuthority", "stream", "direction", "device", "rule", "source", "policyGeneration", "changed", "routingApplied", "verified", "compensationAttempted", "compensationVerified", "persistentPidRule", "existingStreamMigration"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-route-broker-receipt/v1"},
+    "status": {"enum": ["Applied", "AlreadyRouted", "Skipped", "Failed"]},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["no-matching-rule", "stream-vanished", "process-unavailable", "policy-unavailable", "target-unavailable", "current-target-unavailable", "cohort-changed", "audio-unavailable", "unavailable", "timeout", "invalid-response", "move-timeout", "move-failed", "verification-failed", "verification-unavailable", "stream-identity-changed"]}
+      ]
+    },
+    "mode": {"const": "new-streams-only"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "stream": {"type": "string", "pattern": "^(playback|recording)-(0|[1-9][0-9]{0,9})$", "maxLength": 31},
+    "direction": {"enum": ["output", "input"]},
+    "device": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+        {"type": "null"}
+      ]
+    },
+    "rule": {
+      "oneOf": [
+        {"type": "string", "pattern": "^rule-[0-9]{4}$"},
+        {"type": "null"}
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {"enum": ["exact-executable", "directory-prefix", "system-default"]},
+        {"type": "null"}
+      ]
+    },
+    "policyGeneration": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "changed": {"type": "boolean"},
+    "routingApplied": {"type": "boolean"},
+    "verified": {"type": "boolean"},
+    "compensationAttempted": {"type": "boolean"},
+    "compensationVerified": {"type": "boolean"},
+    "persistentPidRule": {"const": false},
+    "existingStreamMigration": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"direction": {"const": "output"}}, "required": ["direction"]},
+      "then": {
+        "properties": {
+          "stream": {"pattern": "^playback-"},
+          "device": {"oneOf": [{"type": "string", "pattern": "^output-[0-9a-f]{16}$"}, {"type": "null"}]}
+        }
+      },
+      "else": {
+        "properties": {
+          "stream": {"pattern": "^recording-"},
+          "device": {"oneOf": [{"type": "string", "pattern": "^input-[0-9a-f]{16}$"}, {"type": "null"}]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Applied"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "device": {"type": "string"},
+          "rule": {"type": "string"},
+          "source": {"enum": ["exact-executable", "directory-prefix"]},
+          "changed": {"const": true},
+          "routingApplied": {"const": true},
+          "verified": {"const": true},
+          "compensationAttempted": {"const": false},
+          "compensationVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "AlreadyRouted"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "device": {"type": "string"},
+          "rule": {"type": "string"},
+          "source": {"enum": ["exact-executable", "directory-prefix"]},
+          "changed": {"const": false},
+          "routingApplied": {"const": false},
+          "verified": {"const": true},
+          "compensationAttempted": {"const": false},
+          "compensationVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Skipped"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "string"},
+          "changed": {"const": false},
+          "routingApplied": {"const": false},
+          "verified": {"const": false},
+          "compensationAttempted": {"const": false},
+          "compensationVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Failed"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "string"},
+          "changed": {"const": false},
+          "routingApplied": {"const": false},
+          "verified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"compensationVerified": {"const": true}}, "required": ["compensationVerified"]},
+      "then": {"properties": {"compensationAttempted": {"const": true}}}
+    }
+  ]
+}

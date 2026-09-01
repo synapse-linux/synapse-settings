@@ -25,6 +25,25 @@ performs a complete refresh after every accepted receipt. The standalone host
 uses only Qt Quick feature QML, so the Audio section does not depend on
 Quickshell-specific types.
 
+## Alpha 4 new-stream broker
+
+The first-party broker is a separate C11 executable. It starts the fixed Pulse
+subscriber, captures the current stream cohort as a baseline, and enforces only
+later unseen `new` events. Startup and restart therefore cannot move existing
+streams. Policy updates and hotplug affect the resolution of a later new stream,
+but never trigger reconciliation of an already active stream.
+
+Each event is bounded and parsed into an opaque stream token. The broker reloads
+the same-UID process start time and executable, policy generation, current
+endpoint and target endpoint before moving. It verifies the same identity and
+target afterwards. Timeout, endpoint disappearance, PID reuse, stream reuse,
+malformed events and verification failure fail closed. Receipts redact all raw
+process and PipeWire metadata. Existing-stream migration is explicitly false.
+
+`--probe` is read-only. `--foreground` is intended only for the separately gated
+systemd user service. Test event limits and executable overrides are absent from
+the production binary.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -49,15 +68,17 @@ output rules for the same application.
 
 ## Enforcement status
 
-Alpha 3 persists and resolves policy but does not yet move streams. Every policy
-view, receipt and resolution reports `audio-route-broker-not-integrated` and
-`enforcementAvailable=false`. A receipt means only that the private policy was
-atomically stored; it explicitly reports `routingApplied=false`.
+Alpha 4 provides a typed new-stream broker source and fixture-qualified engine,
+but it is not installed, active or integrated into the deployed Settings status.
+Policy view, policy receipt and resolution v1 therefore continue to report
+`audio-route-broker-not-integrated` and `enforcementAvailable=false`. A policy
+receipt means only that the private policy was atomically stored and still
+reports `routingApplied=false`.
 
-The future broker will own bounded PipeWire observation and typed stream moves.
-It may apply a rule to new streams and, after a separate reviewed transaction,
-to already active streams. QML will not subscribe to PipeWire or construct raw
-`pactl` operations.
+Only the separate broker event receipt can report a move, and only after verified
+postflight. Existing-stream migration remains unavailable and requires a future
+independent acknowledgement and rollback contract. QML never subscribes to
+PipeWire or constructs raw `pactl` operations.
 
 ## Remaining Audio work
 

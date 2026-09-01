@@ -49,6 +49,8 @@ typedef struct {
   int volume_percent;
   int muted;
   pid_t process_pid;
+  int backend_index;
+  int target_index;
   int process_rule_available;
   const char *direction;
 } audio_stream;
@@ -67,6 +69,8 @@ typedef struct {
   size_t output_count;
   audio_endpoint inputs[AUDIO_ENDPOINT_LIMIT];
   size_t input_count;
+  audio_endpoint backend_sources[AUDIO_ENDPOINT_LIMIT];
+  size_t backend_source_count;
   audio_stream streams[AUDIO_STREAM_LIMIT];
   size_t stream_count;
   audio_card cards[AUDIO_CARD_LIMIT];
@@ -219,6 +223,8 @@ static capture_result capture_command(char *const argv[]) {
     }
     close(pipefd[0]);
     close(pipefd[1]);
+    (void)setenv("LC_ALL", "C", 1);
+    (void)setenv("LANG", "C", 1);
     if (strchr(argv[0], '/'))
       execv(argv[0], argv);
     else
@@ -404,6 +410,9 @@ static int parse_endpoints(json_object *array, audio_endpoint *items,
                            prefix, audio_fnv1a64(items[i].raw_name));
     if (written < 0 || (size_t)written >= sizeof(items[i].id))
       return -1;
+    for (size_t j = 0; j < i; j++)
+      if (strcmp(items[j].id, items[i].id) == 0)
+        return -1;
   }
   return 0;
 }
@@ -482,6 +491,7 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
     int index = json_int_value(value, "index", -1);
     if (index < 0)
       return -1;
+    stream->backend_index = index;
     int written = snprintf(
         stream->id, sizeof(stream->id), "%s-%d",
         strcmp(direction, "playback") == 0 ? "playback" : "recording", index);
@@ -502,6 +512,7 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
       return -1;
     int target_index = json_int_value(
         value, strcmp(direction, "playback") == 0 ? "sink" : "source", -1);
+    stream->target_index = target_index;
     const char *target =
         strcmp(direction, "playback") == 0
             ? endpoint_id_for_index(inventory->outputs, inventory->output_count,
@@ -572,6 +583,9 @@ static int parse_cards(json_object *array, audio_inventory *inventory) {
                            audio_fnv1a64(inventory->cards[i].raw_name));
     if (written < 0 || (size_t)written >= sizeof(inventory->cards[i].id))
       return -1;
+    for (size_t j = 0; j < i; j++)
+      if (strcmp(inventory->cards[j].id, inventory->cards[i].id) == 0)
+        return -1;
   }
   return 0;
 }
@@ -617,6 +631,9 @@ static int load_audio_inventory(audio_inventory *inventory) {
                       default_output, "output", 0) != 0 ||
       parse_endpoints(sources, inventory->inputs, &inventory->input_count,
                       default_input, "input", 1) != 0 ||
+      parse_endpoints(sources, inventory->backend_sources,
+                      &inventory->backend_source_count, default_input, "input",
+                      0) != 0 ||
       parse_stream_array(playback, inventory, "playback") != 0 ||
       parse_stream_array(recording, inventory, "recording") != 0 ||
       validate_stream_identities(inventory) != 0 ||
@@ -872,29 +889,95 @@ int settings_audio_policy_target(const char *direction, const char *requested,
   return 0;
 }
 
-int settings_audio_stream_executable(const char *stream_id, char *direction,
-                                     size_t direction_size, char *path,
-                                     size_t path_size) {
-  if (!stream_id || !direction || !direction_size || !path || !path_size) {
+static const audio_stream *find_stream(const audio_inventory *inventory,
+                                       const char *stream_id) {
+  for (size_t i = 0; i < inventory->stream_count; i++)
+    if (strcmp(inventory->streams[i].id, stream_id) == 0)
+      return &inventory->streams[i];
+  return NULL;
+}
+
+static const audio_endpoint *find_endpoint_by_index(const audio_endpoint *items,
+                                                    size_t count, int index) {
+  for (size_t i = 0; i < count; i++)
+    if (items[i].index == index)
+      return &items[i];
+  return NULL;
+}
+
+static int read_process_start_time(int process_fd, uint64_t *start_time) {
+  int stat_fd = openat(process_fd, "stat", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (stat_fd < 0)
+    return -1;
+  char data[4097];
+  size_t used = 0;
+  while (used < sizeof(data) - 1U) {
+    ssize_t count = read(stat_fd, data + used, sizeof(data) - 1U - used);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count < 0) {
+      int saved = errno;
+      close(stat_fd);
+      errno = saved;
+      return -1;
+    }
+    if (count == 0)
+      break;
+    used += (size_t)count;
+  }
+  if (used >= sizeof(data) - 1U) {
+    close(stat_fd);
+    errno = E2BIG;
+    return -1;
+  }
+  close(stat_fd);
+  data[used] = '\0';
+  char *cursor = strrchr(data, ')');
+  if (!cursor) {
     errno = EINVAL;
     return -1;
   }
-  audio_inventory inventory;
-  if (load_audio_inventory(&inventory) != 0)
-    return -1;
-  const audio_stream *selected = NULL;
-  for (size_t i = 0; i < inventory.stream_count; i++)
-    if (strcmp(inventory.streams[i].id, stream_id) == 0) {
-      selected = &inventory.streams[i];
-      break;
+  cursor++;
+  for (unsigned field = 3U; field <= 22U; field++) {
+    while (*cursor == ' ')
+      cursor++;
+    if (!*cursor) {
+      errno = EINVAL;
+      return -1;
     }
-  if (!selected || selected->process_pid <= 0) {
-    errno = ENOENT;
+    char *end = cursor;
+    while (*end && *end != ' ' && *end != '\n')
+      end++;
+    if (field == 22U) {
+      char saved = *end;
+      *end = '\0';
+      errno = 0;
+      char *parsed_end = NULL;
+      unsigned long long parsed = strtoull(cursor, &parsed_end, 10);
+      int valid = errno == 0 && parsed_end && *parsed_end == '\0';
+      *end = saved;
+      if (!valid) {
+        errno = EINVAL;
+        return -1;
+      }
+      *start_time = (uint64_t)parsed;
+      return 0;
+    }
+    cursor = end;
+  }
+  errno = EINVAL;
+  return -1;
+}
+
+static int trusted_process_executable(pid_t process_pid, char *path,
+                                      size_t path_size, uint64_t *start_time) {
+  if (process_pid <= 0 || !path || !path_size || !start_time) {
+    errno = EINVAL;
     return -1;
   }
   char process_directory[64];
   int written = snprintf(process_directory, sizeof(process_directory),
-                         "/proc/%ld", (long)selected->process_pid);
+                         "/proc/%ld", (long)process_pid);
   if (written < 0 || (size_t)written >= sizeof(process_directory)) {
     errno = ENAMETOOLONG;
     return -1;
@@ -904,9 +987,21 @@ int settings_audio_stream_executable(const char *stream_id, char *direction,
   if (process_fd < 0)
     return -1;
   struct stat owner;
-  if (fstat(process_fd, &owner) != 0 || owner.st_uid != geteuid()) {
+  if (fstat(process_fd, &owner) != 0) {
+    int saved = errno;
+    close(process_fd);
+    errno = saved;
+    return -1;
+  }
+  if (owner.st_uid != geteuid()) {
     close(process_fd);
     errno = EPERM;
+    return -1;
+  }
+  if (read_process_start_time(process_fd, start_time) != 0) {
+    int saved = errno;
+    close(process_fd);
+    errno = saved;
     return -1;
   }
   int executable_fd = openat(process_fd, "exe", O_PATH | O_CLOEXEC);
@@ -939,12 +1034,333 @@ int settings_audio_stream_executable(const char *stream_id, char *direction,
   }
   if (status == 0)
     status = copy_bounded(path, path_size, resolved);
-  if (status == 0)
-    status = copy_bounded(
-        direction, direction_size,
-        strcmp(selected->direction, "playback") == 0 ? "output" : "input");
   free(resolved);
   return status;
+}
+
+int settings_audio_stream_executable(const char *stream_id, char *direction,
+                                     size_t direction_size, char *path,
+                                     size_t path_size) {
+  if (!stream_id || !direction || !direction_size || !path || !path_size) {
+    errno = EINVAL;
+    return -1;
+  }
+  audio_inventory inventory;
+  if (load_audio_inventory(&inventory) != 0)
+    return -1;
+  const audio_stream *selected = find_stream(&inventory, stream_id);
+  if (!selected || selected->process_pid <= 0) {
+    errno = ENOENT;
+    return -1;
+  }
+  uint64_t start_time = 0;
+  if (trusted_process_executable(selected->process_pid, path, path_size,
+                                 &start_time) != 0)
+    return -1;
+  (void)start_time;
+  return copy_bounded(direction, direction_size,
+                      strcmp(selected->direction, "playback") == 0 ? "output"
+                                                                   : "input");
+}
+
+typedef struct {
+  char stream[32];
+  char direction[8];
+  char executable[PATH_MAX];
+  char current_device[32];
+  char current_raw[SETTINGS_FIELD_LIMIT + 1U];
+  char requested_raw[SETTINGS_FIELD_LIMIT + 1U];
+  pid_t process_pid;
+  uint64_t process_start_time;
+  int backend_index;
+  int requested_available;
+} audio_broker_stream_state;
+
+static int parse_broker_stream_token(const char *stream_id, char *direction,
+                                     size_t direction_size, int *index) {
+  if (!stream_id || !direction || !direction_size || !index)
+    return -1;
+  const char *digits = NULL;
+  const char *mapped_direction = NULL;
+  if (strncmp(stream_id, "playback-", 9U) == 0) {
+    digits = stream_id + 9U;
+    mapped_direction = "output";
+  } else if (strncmp(stream_id, "recording-", 10U) == 0) {
+    digits = stream_id + 10U;
+    mapped_direction = "input";
+  } else {
+    return -1;
+  }
+  if (!*digits || (digits[0] == '0' && digits[1]))
+    return -1;
+  for (const char *cursor = digits; *cursor; cursor++)
+    if (*cursor < '0' || *cursor > '9')
+      return -1;
+  errno = 0;
+  char *end = NULL;
+  long parsed = strtol(digits, &end, 10);
+  if (errno != 0 || !end || *end || parsed < 0 || parsed > INT_MAX ||
+      copy_bounded(direction, direction_size, mapped_direction) != 0)
+    return -1;
+  *index = (int)parsed;
+  return 0;
+}
+
+static int load_broker_stream_state(const char *stream_id,
+                                    const char *requested_device,
+                                    audio_broker_stream_state *state,
+                                    const char **reason) {
+  memset(state, 0, sizeof(*state));
+  int token_index = -1;
+  if (parse_broker_stream_token(stream_id, state->direction,
+                                sizeof(state->direction), &token_index) != 0) {
+    *reason = "invalid-stream-token";
+    return -1;
+  }
+  audio_inventory inventory;
+  if (load_audio_inventory(&inventory) != 0) {
+    *reason = inventory.reason;
+    return -2;
+  }
+  const audio_stream *stream = find_stream(&inventory, stream_id);
+  if (!stream || stream->backend_index != token_index) {
+    *reason = "stream-vanished";
+    return 1;
+  }
+  if ((strcmp(stream->direction, "playback") == 0) !=
+      (strcmp(state->direction, "output") == 0)) {
+    *reason = "stream-identity-changed";
+    return 1;
+  }
+  state->process_pid = stream->process_pid;
+  state->backend_index = stream->backend_index;
+  if (copy_bounded(state->stream, sizeof(state->stream), stream_id) != 0 ||
+      trusted_process_executable(stream->process_pid, state->executable,
+                                 sizeof(state->executable),
+                                 &state->process_start_time) != 0) {
+    *reason = "process-unavailable";
+    return 2;
+  }
+  const audio_endpoint *current =
+      strcmp(state->direction, "output") == 0
+          ? find_endpoint_by_index(inventory.outputs, inventory.output_count,
+                                   stream->target_index)
+          : find_endpoint_by_index(inventory.backend_sources,
+                                   inventory.backend_source_count,
+                                   stream->target_index);
+  if (current &&
+      (copy_bounded(state->current_device, sizeof(state->current_device),
+                    current->id) != 0 ||
+       copy_bounded(state->current_raw, sizeof(state->current_raw),
+                    current->raw_name) != 0))
+    return -1;
+  if (requested_device) {
+    audio_endpoint *target =
+        find_endpoint(&inventory, state->direction, requested_device);
+    if (target) {
+      state->requested_available = 1;
+      if (copy_bounded(state->requested_raw, sizeof(state->requested_raw),
+                       target->raw_name) != 0)
+        return -1;
+    }
+  }
+  *reason = NULL;
+  return 0;
+}
+
+static int broker_identity_equal(const audio_broker_stream_state *left,
+                                 const audio_broker_stream_state *right) {
+  return left->backend_index == right->backend_index &&
+         left->process_pid == right->process_pid &&
+         left->process_start_time == right->process_start_time &&
+         strcmp(left->stream, right->stream) == 0 &&
+         strcmp(left->direction, right->direction) == 0 &&
+         strcmp(left->executable, right->executable) == 0;
+}
+
+static int broker_selection_equal(const settings_audio_route_selection *left,
+                                  const settings_audio_route_selection *right) {
+  return left->generation == right->generation &&
+         left->matched == right->matched &&
+         strcmp(left->device, right->device) == 0 &&
+         strcmp(left->rule, right->rule) == 0 &&
+         strcmp(left->source, right->source) == 0;
+}
+
+static void broker_receipt_status(settings_audio_broker_receipt *receipt,
+                                  const char *status, const char *reason) {
+  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
+                     reason ? reason : "");
+}
+
+static int execute_broker_move(const audio_broker_stream_state *state,
+                               const char *raw_target, int *timed_out) {
+  char index[24];
+  int written = snprintf(index, sizeof(index), "%d", state->backend_index);
+  if (written < 0 || (size_t)written >= sizeof(index))
+    return -1;
+  const char *pactl = pactl_binary();
+  char *argv[5] = {(char *)pactl,
+                   strcmp(state->direction, "output") == 0
+                       ? "move-sink-input"
+                       : "move-source-output",
+                   index, (char *)raw_target, NULL};
+  capture_result result = capture_command(argv);
+  *timed_out = result.timed_out;
+  int status = result.data && result.status == 0 ? 0 : -1;
+  capture_free(&result);
+  return status;
+}
+
+int settings_audio_broker_stream_ids(char ids[][32], size_t capacity,
+                                     size_t *count, const char **reason) {
+  if (!ids || !count || !reason || capacity > AUDIO_STREAM_LIMIT) {
+    errno = EINVAL;
+    return -1;
+  }
+  audio_inventory inventory;
+  if (load_audio_inventory(&inventory) != 0) {
+    *reason = inventory.reason;
+    return -1;
+  }
+  if (inventory.stream_count > capacity) {
+    *reason = "stream-limit";
+    errno = E2BIG;
+    return -1;
+  }
+  for (size_t i = 0; i < inventory.stream_count; i++)
+    if (copy_bounded(ids[i], 32U, inventory.streams[i].id) != 0) {
+      *reason = "invalid-response";
+      return -1;
+    }
+  *count = inventory.stream_count;
+  *reason = NULL;
+  return 0;
+}
+
+int settings_audio_broker_apply_new(const char *stream_id,
+                                    settings_audio_broker_receipt *receipt) {
+  if (!stream_id || !receipt) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(receipt, 0, sizeof(*receipt));
+  int token_index = -1;
+  if (parse_broker_stream_token(stream_id, receipt->direction,
+                                sizeof(receipt->direction),
+                                &token_index) != 0 ||
+      copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) != 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  (void)token_index;
+  audio_broker_stream_state first;
+  audio_broker_stream_state planned;
+  settings_audio_route_selection selection;
+  const char *reason = NULL;
+  int prepared = 0;
+  for (unsigned attempt = 0; attempt < 2U; attempt++) {
+    int loaded = load_broker_stream_state(stream_id, NULL, &first, &reason);
+    if (loaded != 0) {
+      broker_receipt_status(receipt, "Skipped", reason);
+      return 0;
+    }
+    if (settings_audio_route_select(first.executable, first.direction,
+                                    &selection) != 0) {
+      broker_receipt_status(receipt, "Skipped", "policy-unavailable");
+      return 0;
+    }
+    receipt->policy_generation = selection.generation;
+    if (copy_bounded(receipt->source, sizeof(receipt->source),
+                     selection.source) != 0)
+      return -1;
+    if (!selection.matched) {
+      broker_receipt_status(receipt, "Skipped", "no-matching-rule");
+      return 0;
+    }
+    if (copy_bounded(receipt->device, sizeof(receipt->device),
+                     selection.device) != 0 ||
+        copy_bounded(receipt->rule, sizeof(receipt->rule), selection.rule) != 0)
+      return -1;
+    loaded = load_broker_stream_state(stream_id, selection.device, &planned,
+                                      &reason);
+    if (loaded != 0) {
+      broker_receipt_status(receipt, "Skipped", reason);
+      return 0;
+    }
+    settings_audio_route_selection confirmed;
+    if (settings_audio_route_select(planned.executable, planned.direction,
+                                    &confirmed) != 0) {
+      broker_receipt_status(receipt, "Skipped", "policy-unavailable");
+      return 0;
+    }
+    if (broker_identity_equal(&first, &planned) &&
+        broker_selection_equal(&selection, &confirmed)) {
+      prepared = 1;
+      break;
+    }
+  }
+  if (!prepared) {
+    broker_receipt_status(receipt, "Skipped", "cohort-changed");
+    return 0;
+  }
+  if (!planned.requested_available) {
+    broker_receipt_status(receipt, "Skipped", "target-unavailable");
+    return 0;
+  }
+  if (!planned.current_raw[0]) {
+    broker_receipt_status(receipt, "Skipped", "current-target-unavailable");
+    return 0;
+  }
+  if (strcmp(planned.current_device, selection.device) == 0) {
+    receipt->verified = 1;
+    broker_receipt_status(receipt, "AlreadyRouted", NULL);
+    return 0;
+  }
+  int move_timed_out = 0;
+  int moved = execute_broker_move(&planned, planned.requested_raw,
+                                  &move_timed_out) == 0;
+  audio_broker_stream_state after;
+  int after_status =
+      load_broker_stream_state(stream_id, selection.device, &after, &reason);
+  int same_identity =
+      after_status == 0 && broker_identity_equal(&planned, &after);
+  int at_requested =
+      same_identity && strcmp(after.current_device, selection.device) == 0;
+  if (moved && at_requested) {
+    receipt->changed = 1;
+    receipt->routing_applied = 1;
+    receipt->verified = 1;
+    broker_receipt_status(receipt, "Applied", NULL);
+    return 0;
+  }
+  if (same_identity && at_requested) {
+    receipt->compensation_attempted = 1;
+    int compensation_timed_out = 0;
+    (void)execute_broker_move(&after, planned.current_raw,
+                              &compensation_timed_out);
+    audio_broker_stream_state restored;
+    const char *restore_reason = NULL;
+    if (load_broker_stream_state(stream_id, NULL, &restored, &restore_reason) ==
+            0 &&
+        broker_identity_equal(&planned, &restored) &&
+        strcmp(restored.current_device, planned.current_device) == 0)
+      receipt->compensation_verified = 1;
+  }
+  if (after_status == 1)
+    broker_receipt_status(receipt, "Failed", "stream-vanished");
+  else if (after_status < 0)
+    broker_receipt_status(receipt, "Failed", "verification-unavailable");
+  else if (!same_identity && after_status == 0)
+    broker_receipt_status(receipt, "Failed", "stream-identity-changed");
+  else if (move_timed_out)
+    broker_receipt_status(receipt, "Failed", "move-timeout");
+  else if (!moved)
+    broker_receipt_status(receipt, "Failed", "move-failed");
+  else
+    broker_receipt_status(receipt, "Failed", "verification-failed");
+  return 0;
 }
 
 static int execute_default(const char *direction,
