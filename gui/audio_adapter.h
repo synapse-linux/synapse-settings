@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
+#include <QVariant>
 #include <QVariantList>
 
 #include <functional>
@@ -51,6 +52,19 @@ bool decodeDefaultPlan(const QByteArray &payload,
 bool decodeDefaultReceipt(const QByteArray &payload,
                           const QString &expectedDirection,
                           const QString &expectedDevice, bool *changed,
+                          QString *errorId);
+bool decodeControlPlan(const QByteArray &payload, const QString &expectedTarget,
+                       const QString &expectedControl,
+                       const QVariant &expectedOriginalValue,
+                       const QVariant &expectedRequestedValue, QString *cohort,
+                       bool *changed, QString *errorId);
+bool decodeControlReceipt(const QByteArray &payload,
+                          const QString &expectedTarget,
+                          const QString &expectedControl,
+                          const QVariant &expectedOriginalValue,
+                          const QVariant &expectedRequestedValue,
+                          QString *status, QString *reason, bool *changed,
+                          bool *rollbackAttempted, bool *rollbackVerified,
                           QString *errorId);
 bool decodeRouteReceipt(const QByteArray &payload,
                         const QString &expectedAction,
@@ -126,6 +140,8 @@ public:
   Q_INVOKABLE bool moveAudioStream(const QString &streamId,
                                    const QString &originalDeviceId,
                                    const QString &requestedDeviceId);
+  Q_INVOKABLE bool setAudioVolume(const QString &targetId, int percent);
+  Q_INVOKABLE bool setAudioMuted(const QString &targetId, bool muted);
   Q_INVOKABLE bool chooseAudioProcessRule(const QString &direction,
                                           const QString &deviceId);
   Q_INVOKABLE bool confirmAudioProcessRule(const QString &streamId);
@@ -172,6 +188,9 @@ private:
   QVariantMap audioStream(const QString &streamId) const;
   bool validStreamMove(const QString &streamId, const QString &originalDeviceId,
                        const QString &requestedDeviceId) const;
+  QVariantMap audioControlTarget(const QString &targetId) const;
+  bool startAudioControl(const QString &targetId, const QString &control,
+                         const QVariant &requestedValue);
   bool validRule(const QString &ruleId) const;
   QVariantMap routeRule(const QString &ruleId) const;
   bool startRouteRule(const QString &action, const QStringList &arguments,

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapseos.dev/schemas/settings/audio-control-receipt-v1.schema.json",
+  "title": "Synapse Settings Audio control receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "reason", "target", "targetType", "control",
+    "originalValue", "requestedValue", "changed", "mutationAttempted",
+    "verified", "rollbackAttempted", "rollbackVerified", "stateAuthority",
+    "requiresAcknowledgement", "singleTarget", "safeVolumeMaximumPercent",
+    "playbackStarted", "captureStarted", "profileChanged", "routingChanged",
+    "bounded"
+  ],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-control-receipt/v1"},
+    "status": {"enum": ["Applied", "AlreadySet", "Refused", "Failed"]},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "enum": [
+            "audio-unavailable", "target-vanished", "process-unavailable",
+            "original-value-mismatch", "control-cohort-changed",
+            "mutation-timeout", "mutation-failed", "verification-failed",
+            "verification-unavailable", "target-identity-changed",
+            "rollback-failed"
+          ]
+        }
+      ]
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^(output|input)-[0-9a-f]{16}$|^(playback|recording)-(0|[1-9][0-9]{0,9})$"
+    },
+    "targetType": {"enum": ["output", "input", "playback", "recording"]},
+    "control": {"enum": ["volume", "mute"]},
+    "originalValue": {},
+    "requestedValue": {},
+    "changed": {"type": "boolean"},
+    "mutationAttempted": {"type": "boolean"},
+    "verified": {"type": "boolean"},
+    "rollbackAttempted": {"type": "boolean"},
+    "rollbackVerified": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-control/v1"},
+    "singleTarget": {"const": true},
+    "safeVolumeMaximumPercent": {"const": 100},
+    "playbackStarted": {"const": false},
+    "captureStarted": {"const": false},
+    "profileChanged": {"const": false},
+    "routingChanged": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"control": {"const": "volume"}}},
+      "then": {
+        "properties": {
+          "originalValue": {"type": "integer", "minimum": 0, "maximum": 999},
+          "requestedValue": {"type": "integer", "minimum": 0, "maximum": 100}
+        }
+      },
+      "else": {
+        "properties": {
+          "originalValue": {"type": "boolean"},
+          "requestedValue": {"type": "boolean"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "output"}}},
+      "then": {"properties": {"target": {"pattern": "^output-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "input"}}},
+      "then": {"properties": {"target": {"pattern": "^input-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "playback"}}},
+      "then": {"properties": {"target": {"pattern": "^playback-(0|[1-9][0-9]{0,9})$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "recording"}}},
+      "then": {"properties": {"target": {"pattern": "^recording-(0|[1-9][0-9]{0,9})$"}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "Applied"}}},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": true},
+          "mutationAttempted": {"const": true},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "AlreadySet"}}},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": false},
+          "mutationAttempted": {"const": false},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Refused"}}},
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "audio-unavailable", "target-vanished", "process-unavailable",
+              "original-value-mismatch", "control-cohort-changed"
+            ]
+          },
+          "changed": {"const": false},
+          "mutationAttempted": {"const": false},
+          "verified": {"const": false},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Failed"}}},
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "target-vanished", "mutation-timeout", "mutation-failed",
+              "verification-failed", "verification-unavailable",
+              "target-identity-changed", "rollback-failed"
+            ]
+          },
+          "changed": {"const": false},
+          "mutationAttempted": {"const": true},
+          "verified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"rollbackAttempted": {"const": false}}},
+      "then": {"properties": {"rollbackVerified": {"const": false}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": true}
+        }
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "mutation-timeout", "mutation-failed", "verification-failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": false}
+        }
+      },
+      "then": {"properties": {"reason": {"const": "rollback-failed"}}}
+    },
+    {
+      "if": {"properties": {"reason": {"const": "rollback-failed"}}},
+      "then": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    }
+  ]
+}

@@ -14,6 +14,8 @@ grep -Fqx 'module Synapse.Settings.Audio' "$module/qmldir"
 grep -Fqx 'plugin synapse_settings_audio_qml' "$module/qmldir"
 grep -Fq 'isSingleton: true' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'exports: ["AudioBackend 1.0"]' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioVolume"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioMuted"' "$module/synapse-settings-audio.qmltypes"
 
 while IFS= read -r import_line; do
   case "$import_line" in

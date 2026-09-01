@@ -27,6 +27,8 @@ It implements these fixed operations:
 - `loadAudio()`;
 - `setAudioDefault(direction, deviceId)`;
 - `moveAudioStream(streamId, originalDeviceId, requestedDeviceId)`;
+- `setAudioVolume(targetId, percent)`;
+- `setAudioMuted(targetId, muted)`;
 - `chooseAudioProcessRule(direction, deviceId)`;
 - `confirmAudioProcessRule(streamId)` and `cancelAudioProcessRule()`;
 - `chooseAudioExecutableRule(direction, deviceId)`;
@@ -41,7 +43,13 @@ to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
 and republishes only a complete inventory-plus-policy-plus-broker-status cohort.
-For an existing active stream it separately validates the original endpoint,
+Volume and mute follow their own plan, opaque-cohort, exact-acknowledgement,
+apply, postflight and compensation contract. Every accepted plan reaches the
+apply decoder; an unchanged value is a verified `AlreadySet` receipt without a
+setter. QML passes only a published target and bounded typed requested value; it
+cannot construct the cohort or setter.
+Requested volume is capped at 100%, and the dialog explicitly starts no playback
+or capture and changes no routing or profile. For an existing active stream it separately validates the original endpoint,
 requests a fresh opaque cohort, supplies the core-owned exact acknowledgement,
 and independently validates the one-stream receipt. QML only opens the explicit
 confirmation and chooses a typed endpoint; it never receives the cohort or

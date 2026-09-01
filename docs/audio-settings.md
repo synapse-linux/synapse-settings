@@ -97,6 +97,40 @@ uncertain transport or contract failure. QML presents a separate modal
 confirmation for one stream and receives only typed stream and endpoint tokens.
 It cannot construct the plan, acknowledgement, cohort or backend command.
 
+## Alpha 8 guarded volume and mute controls
+
+Volume and mute are one-target transactions, not ambient sliders and not
+routing/default operations. A read-only plan accepts one opaque output, input,
+playback or recording target. Volume requests are exact integer percentages
+from 0 through 100; mute requests are exact booleans. The plan returns the
+current typed value and an opaque `control-…` cohort without exposing a raw
+PipeWire name, stream index, PID, executable, process start time or command.
+
+Apply requires the exact original value, requested value, cohort and
+`synapse-settings/audio-control/v1`. C11 resolves and checks the private target
+identity twice before one fixed setter. It then reloads the target and reports
+`Applied` only if command success, identity and requested value are all proven.
+The Qt adapter sends acknowledged apply for every accepted plan so even a
+same-value result is independently validated; C11 returns `AlreadySet` without
+invoking a setter. Stale original values, cohorts, streams or process identities
+refuse before mutation.
+
+A command failure or timeout can be ambiguous. If fresh state proves the same
+target but a non-original value, C11 revalidates both identity and that observed
+value once more immediately before attempting one exact-original compensation.
+It does not mutate again after an external restoration, an intervening third
+value, an unproven or vanished target, or an identity change. Requested volume
+is capped at 100% to prevent software
+amplification; an original value up to 999% is accepted only for exact rollback.
+Every plan and receipt states that no playback, capture, profile or routing
+change occurred. The operation also does not create a default or durable rule.
+
+The Qt adapter independently decodes both contracts, owns the acknowledgement
+and complete plan/apply sequence, and refreshes inventory, policy and broker
+status after every apply result. QML presents explicit volume and mute dialogs
+for one published item and receives only the target token and bounded typed
+values. This source increment performed no live mutation, playback or capture.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -166,8 +200,9 @@ remain separate gates.
 
 ## Remaining Audio work
 
-Typed volume/mute/balance, profiles and ports, levels, safe playback tests,
-Bluetooth state, hotplug and GoXLR presence remain separate capabilities. A safe
-sample never authorizes capture, profile import or GoXLR firmware/mixer mutation.
+Balance, profiles and ports, level metering, safe playback tests, Bluetooth
+state, hotplug and GoXLR presence remain separate capabilities. Alpha 8 volume
+and mute authority never implies any of them. A safe sample never authorizes
+capture, profile import or GoXLR firmware/mixer mutation.
 The existing Quickshell `AudioPanel.qml` direct mutation model must not be reused
 inside Settings.

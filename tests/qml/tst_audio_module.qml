@@ -28,6 +28,8 @@ TestCase {
         property string audioErrorId: ""
         signal audioProcessChoiceRequested()
         function loadAudio() {}
+        function setAudioVolume(target, percent) {}
+        function setAudioMuted(target, muted) {}
     }
 
     Component {
@@ -54,6 +56,8 @@ TestCase {
         compare(typeof AudioBackend.loadAudio, "function")
         compare(typeof AudioBackend.setAudioDefault, "function")
         compare(typeof AudioBackend.moveAudioStream, "function")
+        compare(typeof AudioBackend.setAudioVolume, "function")
+        compare(typeof AudioBackend.setAudioMuted, "function")
         compare(typeof AudioBackend.chooseAudioProcessRule, "function")
         compare(typeof AudioBackend.chooseAudioExecutableRule, "function")
         compare(typeof AudioBackend.chooseAudioDirectoryRule, "function")

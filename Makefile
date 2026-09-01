@@ -7,7 +7,7 @@ DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 QMLDIR ?= $(LIBDIR)/qt6/qml
 BUILD_DIR ?= build
-VERSION := 0.7.0-alpha.1
+VERSION := 0.8.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -15,11 +15,11 @@ BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 BASE_CXXFLAGS = -O2 -g -std=c++17 -Wall -Wextra -Wpedantic -Werror \
 	-fstack-protector-strong -fPIC -march=x86-64 -mtune=generic
 BASE_LDFLAGS = -Wl,-z,relro,-z,now -pie
-REPRO_FLAGS = -ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
+REPRO_FLAGS = -ffile-prefix-map=$(CURDIR)=. \
+	-fdebug-prefix-map=$(CURDIR)=. -fmacro-prefix-map=$(CURDIR)=. \
+	-ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
 	-fdebug-prefix-map=$(abspath $(BUILD_DIR))=build \
-	-fmacro-prefix-map=$(abspath $(BUILD_DIR))=build \
-	-ffile-prefix-map=$(CURDIR)=. -fdebug-prefix-map=$(CURDIR)=. \
-	-fmacro-prefix-map=$(CURDIR)=.
+	-fmacro-prefix-map=$(abspath $(BUILD_DIR))=build
 
 CPPFLAGS ?=
 CFLAGS ?=
@@ -68,8 +68,12 @@ GUI_ENABLED := $(GUI_DEPS_AVAILABLE)
 endif
 
 AUDIO_SOURCES := src/audio.c src/audio_policy.c src/audio_broker_status.c
-SOURCES := src/synapse_settings.c $(AUDIO_SOURCES)
-BROKER_SOURCES := src/audio_broker.c $(AUDIO_SOURCES)
+AUDIO_INTERNALS := src/audio_control.inc
+ISA_NOTE_SOURCE := src/x86_64_baseline_note.c
+ISA_NOTE_SCRIPT := src/x86_64_baseline_note.ld
+ISA_NOTE_LDFLAGS := -Wl,-T,$(abspath $(ISA_NOTE_SCRIPT))
+SOURCES := src/synapse_settings.c $(AUDIO_SOURCES) $(ISA_NOTE_SOURCE)
+BROKER_SOURCES := src/audio_broker.c $(AUDIO_SOURCES) $(ISA_NOTE_SOURCE)
 BINARY := $(BUILD_DIR)/synapse-settings
 TEST_BINARY := $(BUILD_DIR)/synapse-settings-test
 BROKER_BINARY := $(BUILD_DIR)/synapse-audio-route-broker
@@ -77,6 +81,7 @@ BROKER_TEST_BINARY := $(BUILD_DIR)/synapse-audio-route-broker-test
 GUI_BINARY := $(BUILD_DIR)/synapse-settings-gui
 GUI_SOURCES := gui/main.cpp gui/audio_adapter.cpp gui/localization.cpp
 GUI_HEADERS := gui/audio_adapter.h gui/localization.h
+GUI_ISA_NOTE_OBJECT := $(BUILD_DIR)/x86_64_baseline_note.o
 GUI_MOC := $(BUILD_DIR)/moc_audio_adapter.cpp $(BUILD_DIR)/moc_localization.cpp
 GUI_QML := gui/qml/Main.qml gui/qml/AudioSettings.qml \
 	gui/qml/AudioSettingsSection.qml gui/qml/AudioShellHost.qml
@@ -93,7 +98,7 @@ GUI_PLUGIN_HEADERS := gui/audio_qml_plugin.h gui/audio_adapter.h \
 GUI_PLUGIN_MOC := $(BUILD_DIR)/moc_audio_qml_plugin.cpp
 GUI_PLUGIN_QRC_FILE := $(BUILD_DIR)/audio_plugin_resources.qrc
 GUI_PLUGIN_RCC := $(BUILD_DIR)/qrc_audio_plugin_resources.cpp
-GUI_PLUGIN_LDFLAGS := -shared -Wl,-z,relro,-z,now
+GUI_PLUGIN_LDFLAGS := -shared -Wl,-z,relro,-z,now $(ISA_NOTE_LDFLAGS)
 GUI_MODULE_REL := Synapse/Settings/Audio
 GUI_MODULE_ROOT := $(BUILD_DIR)/qml
 GUI_MODULE_DIR := $(GUI_MODULE_ROOT)/$(GUI_MODULE_REL)
@@ -139,29 +144,39 @@ endif
 $(BUILD_DIR):
 	install -d -m 0755 "$@"
 
-$(BINARY): $(SOURCES) src/settings_internal.h | $(BUILD_DIR)
+$(GUI_ISA_NOTE_OBJECT): $(ISA_NOTE_SOURCE) | $(BUILD_DIR)
+	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) \
+		$(REPRO_FLAGS) -c -o "$@" "$<"
+
+$(BINARY): $(SOURCES) $(AUDIO_INTERNALS) src/settings_internal.h \
+		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) \
 		$(REPRO_FLAGS) $(CORE_CFLAGS) $(JSON_C_CFLAGS) -o "$@" \
-		$(SOURCES) $(BASE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) \
-		$(JSON_C_LIBS) $(LDLIBS)
+		$(SOURCES) $(BASE_LDFLAGS) $(ISA_NOTE_LDFLAGS) $(LDFLAGS) \
+		$(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
 
-$(TEST_BINARY): $(SOURCES) src/settings_internal.h | $(BUILD_DIR)
+$(TEST_BINARY): $(SOURCES) $(AUDIO_INTERNALS) src/settings_internal.h \
+		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_TEST_HOOKS=1 \
 		$(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) $(CORE_CFLAGS) \
 		$(JSON_C_CFLAGS) -o "$@" $(SOURCES) $(BASE_LDFLAGS) \
-		$(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
+		$(ISA_NOTE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) \
+		$(LDLIBS)
 
-$(BROKER_BINARY): $(BROKER_SOURCES) src/settings_internal.h | $(BUILD_DIR)
+$(BROKER_BINARY): $(BROKER_SOURCES) $(AUDIO_INTERNALS) \
+		src/settings_internal.h $(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) \
 		$(REPRO_FLAGS) $(CORE_CFLAGS) $(JSON_C_CFLAGS) -o "$@" \
-		$(BROKER_SOURCES) $(BASE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) \
-		$(JSON_C_LIBS) $(LDLIBS)
+		$(BROKER_SOURCES) $(BASE_LDFLAGS) $(ISA_NOTE_LDFLAGS) \
+		$(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
 
-$(BROKER_TEST_BINARY): $(BROKER_SOURCES) src/settings_internal.h | $(BUILD_DIR)
+$(BROKER_TEST_BINARY): $(BROKER_SOURCES) $(AUDIO_INTERNALS) \
+		src/settings_internal.h $(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_TEST_HOOKS=1 \
 		$(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) $(CORE_CFLAGS) \
 		$(JSON_C_CFLAGS) -o "$@" $(BROKER_SOURCES) $(BASE_LDFLAGS) \
-		$(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
+		$(ISA_NOTE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) \
+		$(LDLIBS)
 
 $(BUILD_DIR)/moc_audio_adapter.cpp: gui/audio_adapter.h | $(BUILD_DIR)
 	"$(MOC6)" -f audio_adapter.h -o "$@" "$<"
@@ -198,15 +213,18 @@ $(GUI_PLUGIN_QRC_FILE): $(GUI_QM) | $(BUILD_DIR)
 $(GUI_PLUGIN_RCC): $(GUI_PLUGIN_QRC_FILE) | $(BUILD_DIR)
 	"$(RCC6)" -name synapse_settings_audio_qml -o "$@" "$<"
 
-$(GUI_BINARY): $(GUI_SOURCES) $(GUI_HEADERS) $(GUI_MOC) $(GUI_RCC) $(BINARY) | $(BUILD_DIR)
+$(GUI_BINARY): $(GUI_SOURCES) $(GUI_HEADERS) $(GUI_MOC) $(GUI_RCC) \
+		$(GUI_ISA_NOTE_OBJECT) $(BINARY) $(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CXXFLAGS) $(CXXFLAGS) \
 		$(REPRO_FLAGS) $(GUI_CXX_COMPAT) -Igui \
 		$$( $(PKG_CONFIG) --cflags $(GUI_PACKAGES) ) -o "$@" \
-		$(GUI_SOURCES) $(GUI_MOC) $(GUI_RCC) $(BASE_LDFLAGS) \
-		$(LDFLAGS) $$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
+		$(GUI_SOURCES) $(GUI_MOC) $(GUI_RCC) $(GUI_ISA_NOTE_OBJECT) \
+		$(BASE_LDFLAGS) $(ISA_NOTE_LDFLAGS) $(LDFLAGS) \
+		$$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
 
 $(GUI_PLUGIN): $(GUI_PLUGIN_SOURCES) $(GUI_PLUGIN_HEADERS) \
-		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) | $(BUILD_DIR)
+		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) \
+		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CXXFLAGS) $(CXXFLAGS) \
 		$(REPRO_FLAGS) $(GUI_CXX_COMPAT) -Igui \
 		$$( $(PKG_CONFIG) --cflags $(GUI_PACKAGES) ) -o "$@" \
@@ -215,7 +233,8 @@ $(GUI_PLUGIN): $(GUI_PLUGIN_SOURCES) $(GUI_PLUGIN_HEADERS) \
 		$$( $(PKG_CONFIG) --libs $(GUI_PACKAGES) ) $(LDLIBS)
 
 $(GUI_PLUGIN_TEST): $(GUI_PLUGIN_SOURCES) $(GUI_PLUGIN_HEADERS) \
-		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) | $(BUILD_DIR)
+		$(GUI_MOC) $(GUI_PLUGIN_MOC) $(GUI_PLUGIN_RCC) \
+		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
 	$(CXX) $(BASE_CPPFLAGS) $(CPPFLAGS) \
 		-DSYNAPSE_SETTINGS_GUI_TEST_HOOKS=1 \
 		$(BASE_CXXFLAGS) $(CXXFLAGS) $(REPRO_FLAGS) $(GUI_CXX_COMPAT) \
@@ -290,7 +309,9 @@ else
 	@echo "synapse-settings: Qt 6 GUI SDK unavailable" >&2; exit 1
 endif
 
-test-all: test test-gui
+test-all: all test test-gui
+	./tests/elf-isa-boundary.sh "$(BINARY)" "$(BROKER_BINARY)" \
+		"$(GUI_BINARY)" "$(GUI_PLUGIN)"
 
 install: $(ALL_TARGETS)
 	install -D -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/synapse-settings"

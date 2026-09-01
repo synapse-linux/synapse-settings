@@ -13,10 +13,10 @@ TestCase {
             property bool audioAvailable: true
             property string audioReason: ""
             property var audioOutputs: [
-                { id: "output-0123456789abcdef", label: "Output", default: true, volumePercent: 40, muted: false },
-                { id: "output-fedcba9876543210", label: "Headset", default: false, volumePercent: 50, muted: false }
+                { id: "output-0123456789abcdef", label: "Output", default: true, volumePercent: 40, muted: false, levelControlAvailable: true },
+                { id: "output-fedcba9876543210", label: "Headset", default: false, volumePercent: 50, muted: false, levelControlAvailable: true }
             ]
-            property var audioInputs: [{ id: "input-0123456789abcdef", label: "Input", default: true, volumePercent: 50, muted: false }]
+            property var audioInputs: [{ id: "input-0123456789abcdef", label: "Input", default: true, volumePercent: 50, muted: false, levelControlAvailable: true }]
             property var audioStreams: [{
                 id: "playback-30",
                 label: "Game",
@@ -25,7 +25,8 @@ TestCase {
                 volumePercent: 75,
                 muted: false,
                 processRuleAvailable: true,
-                moveAvailable: true
+                moveAvailable: true,
+                levelControlAvailable: true
             }]
             property var audioCards: []
             property var audioRouteRules: [{
@@ -52,6 +53,8 @@ TestCase {
             property int audioSets: 0
             property int processRules: 0
             property int streamMoves: 0
+            property int volumeSets: 0
+            property int muteSets: 0
             property int executableRules: 0
             property int directoryRules: 0
             property int confirmedProcessRules: 0
@@ -68,6 +71,14 @@ TestCase {
             function moveAudioStream(stream, originalDevice, requestedDevice) {
                 streamMoves++
                 lastCall = [stream, originalDevice, requestedDevice]
+            }
+            function setAudioVolume(target, percent) {
+                volumeSets++
+                lastCall = [target, percent]
+            }
+            function setAudioMuted(target, muted) {
+                muteSets++
+                lastCall = [target, muted]
             }
             function chooseAudioProcessRule(direction, device) {
                 processRules++
@@ -157,6 +168,29 @@ TestCase {
         compare(backend.lastCall, ["playback-30", "output-0123456789abcdef", "output-fedcba9876543210"])
         compare(section.pendingMoveStream, "")
         compare(section.pendingMoveRequestedDevice, "")
+    }
+
+    function test_typedVolumeAndMuteControl() {
+        let backend = createTemporaryObject(fakeBackend, this)
+        let section = createTemporaryObject(audioComponent, this, { backend: backend })
+        verify(section)
+        compare(section.controlBoundaryText(), "Volume and mute affect one selected item. Synapse does not play or record a test sound and does not change routing or profiles.")
+        section.pendingControlTarget = "output-0123456789abcdef"
+        section.pendingControl = "volume"
+        section.pendingControlOriginalVolume = 40
+        section.pendingControlRequestedVolume = 35
+        verify(section.applyPendingControl())
+        compare(backend.volumeSets, 1)
+        compare(backend.lastCall, ["output-0123456789abcdef", 35])
+        compare(section.pendingControlTarget, "")
+        section.pendingControlTarget = "playback-30"
+        section.pendingControl = "mute"
+        section.pendingControlOriginalMuted = false
+        section.pendingControlRequestedMuted = true
+        verify(section.applyPendingControl())
+        compare(backend.muteSets, 1)
+        compare(backend.lastCall, ["playback-30", true])
+        compare(section.pendingControlTarget, "")
     }
 
     function test_typedProcessExecutableAndDirectoryRules() {

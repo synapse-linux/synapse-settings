@@ -3,7 +3,8 @@
 ## Layers
 
 1. `synapse-settings` C11 core owns inventory, validation, canonicalization,
-   policy persistence, precedence and guarded default-device operations.
+   policy persistence, precedence and guarded default-device and level-control
+   operations.
 2. `AudioAdapter` is a thin Qt/C++ boundary. It owns bounded asynchronous core
    execution, strict contract decoding, native path choosers and publication of
    bounded presentation projections.
@@ -32,7 +33,11 @@ package-owned translations. The production singleton always targets
 the bounded fixture backend override. Because a shared object does not receive
 an executable startup note, `x86_64_baseline_note.cpp` publishes the plugin's
 GNU baseline ISA property explicitly; `-march=x86-64 -mtune=generic` remains
-the code-generation authority.
+the code-generation authority. The executable targets also compile
+`src/x86_64_baseline_note.c`; its bounded companion linker script replaces the
+startup property so needed and used remain exactly baseline without using the
+rejected linker `-z x86-64-baseline` path. The production ELF boundary test
+checks all four installed artifacts.
 
 `AudioShellHost` exposes readiness, availability, busy state, broker activity,
 enforcement availability and bounded status/reason/error identifiers. It does
@@ -80,6 +85,23 @@ Application policy mutations validate the exact receipt and then perform the
 same complete refresh. A failed mutation preserves the last accepted model and
 publishes only a deterministic error identifier.
 
+A GUI volume or mute transaction is independent from defaults, policy and
+routing:
+
+1. validate one published opaque output, input, playback-stream or
+   recording-stream target and a requested typed value;
+2. request and independently validate a fresh read-only plan and opaque cohort;
+3. invoke acknowledged apply with the exact original typed value and cohort for
+   every accepted plan; unchanged state returns `AlreadySet` without a setter;
+4. independently validate `Applied`, `AlreadySet`, `Refused` or `Failed` plus
+   postflight and compensation invariants;
+5. reload inventory, policy and broker status after every apply outcome.
+
+Requested volume is limited to 0–100%. Mute is an exact boolean. QML opens a
+visible confirmation and passes only the opaque target and requested typed
+value; it never receives the original backend identity, cohort,
+acknowledgement, stream process identity or setter argv.
+
 A GUI existing-stream transaction is independent:
 
 1. validate one published opaque stream, its exact current opaque endpoint and a
@@ -94,6 +116,38 @@ A GUI existing-stream transaction is independent:
 
 QML owns only the visible modal confirmation. It never receives the cohort,
 acknowledgement, process identity, backend index or raw endpoint.
+
+## Guarded volume and mute transaction boundary
+
+Alpha 8 exposes separate `plan-volume`, `set-volume`, `plan-mute` and `set-mute`
+operations. A target must be an opaque output/input endpoint token or bounded
+playback/recording stream token. C11 resolves the private raw endpoint or stream
+index and, for streams, pins the same-UID process executable and start time.
+The opaque `control-…` cohort binds that identity, target kind, backend index,
+control kind, exact original value and requested value.
+
+Apply requires the exact original value, cohort and
+`synapse-settings/audio-control/v1`. It repeats the complete state/identity
+preflight twice before issuing exactly one fixed `set-sink-volume`,
+`set-source-volume`, `set-sink-input-volume`, `set-source-output-volume` or
+corresponding mute argv. Command exit alone never proves success: a fresh
+postflight must show the same target identity and requested value. Requested
+volume cannot exceed 100%; an original value through 999% may be carried only
+so a previously amplified target can be restored exactly.
+
+If an uncertain command visibly changed the same proven target without a
+verified requested result, C11 freshly revalidates the exact identity and
+observed value immediately before performing at most one compensation to the
+exact original value. An external restoration causes no second mutation; an
+intervening third value, target disappearance, stream-process identity change
+or unavailable state blocks unsafe compensation and cannot produce an
+`Applied` receipt. A failed compensation is explicit. The contracts fix
+`singleTarget=true` and state that playback, capture, profiles and routing were
+not changed. Default selection, persistent policy and stream movement remain
+separate authorities.
+
+This capability was qualified only with compile-time fixture overrides. It did
+not change a live device or stream and did not start playback or capture.
 
 ## PipeWire-Pulse core adapter
 

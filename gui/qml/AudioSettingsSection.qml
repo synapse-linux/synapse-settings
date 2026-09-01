@@ -17,6 +17,13 @@ Item {
     property string pendingMoveDirection: ""
     property string pendingMoveOriginalDevice: ""
     property string pendingMoveRequestedDevice: ""
+    property string pendingControlTarget: ""
+    property string pendingControlLabel: ""
+    property string pendingControl: ""
+    property int pendingControlOriginalVolume: 0
+    property int pendingControlRequestedVolume: 0
+    property bool pendingControlOriginalMuted: false
+    property bool pendingControlRequestedMuted: false
     readonly property var outputs: backend ? backend.audioOutputs || [] : []
     readonly property var inputs: backend ? backend.audioInputs || [] : []
     readonly property var streams: backend ? backend.audioStreams || [] : []
@@ -82,6 +89,47 @@ Item {
         return true
     }
 
+    function requestVolume(target, label, currentVolume) {
+        pendingControlTarget = target
+        pendingControlLabel = label
+        pendingControl = "volume"
+        pendingControlOriginalVolume = currentVolume
+        pendingControlRequestedVolume = Math.min(100, Math.max(0, currentVolume))
+        volumeDialog.open()
+    }
+
+    function requestMute(target, label, currentMuted) {
+        pendingControlTarget = target
+        pendingControlLabel = label
+        pendingControl = "mute"
+        pendingControlOriginalMuted = currentMuted
+        pendingControlRequestedMuted = !currentMuted
+        muteDialog.open()
+    }
+
+    function clearPendingControl() {
+        pendingControlTarget = ""
+        pendingControlLabel = ""
+        pendingControl = ""
+        pendingControlOriginalVolume = 0
+        pendingControlRequestedVolume = 0
+        pendingControlOriginalMuted = false
+        pendingControlRequestedMuted = false
+    }
+
+    function applyPendingControl() {
+        if (pendingControlTarget === "" || !backend)
+            return false
+        if (pendingControl === "volume")
+            backend.setAudioVolume(pendingControlTarget, pendingControlRequestedVolume)
+        else if (pendingControl === "mute")
+            backend.setAudioMuted(pendingControlTarget, pendingControlRequestedMuted)
+        else
+            return false
+        clearPendingControl()
+        return true
+    }
+
     function chooseProcessRule(direction, device) {
         if (backend)
             backend.chooseAudioProcessRule(direction, device)
@@ -109,6 +157,10 @@ Item {
         case "audio-default-unchanged": return qsTr("The selected device was already the default.")
         case "audio-stream-moved": return qsTr("The active Audio stream moved and was verified.")
         case "audio-stream-unchanged": return qsTr("The active Audio stream was already on that device.")
+        case "audio-volume-applied": return qsTr("Volume changed and verified.")
+        case "audio-volume-unchanged": return qsTr("The selected Audio item already had that volume.")
+        case "audio-mute-applied": return qsTr("Mute state changed and verified.")
+        case "audio-mute-unchanged": return qsTr("The selected Audio item already had that mute state.")
         case "audio-route-rule-saved": return qsTr("Application Audio rule saved.")
         case "audio-route-rule-unchanged": return qsTr("The Application Audio rule was already present.")
         case "audio-route-rule-removed": return qsTr("Application Audio rule removed.")
@@ -140,6 +192,10 @@ Item {
         return qsTr("Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
     }
 
+    function controlBoundaryText() {
+        return qsTr("Volume and mute affect one selected item. Synapse does not play or record a test sound and does not change routing or profiles.")
+    }
+
     function errorText(errorId) {
         switch (errorId) {
         case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
@@ -160,6 +216,10 @@ Item {
         case "audio-stream-move-refused": return qsTr("The stream state changed or became unavailable. Nothing was moved.")
         case "audio-stream-move-restored": return qsTr("The move failed; the exact original device was restored and verified.")
         case "audio-stream-move-failed": return qsTr("The stream move could not be verified safely.")
+        case "audio-control-plan-failed": return qsTr("The Audio control could not be planned safely.")
+        case "audio-control-refused": return qsTr("The Audio item changed or became unavailable. Nothing was changed.")
+        case "audio-control-restored": return qsTr("The Audio control failed; the exact original value was restored and verified.")
+        case "audio-control-failed": return qsTr("The Audio control outcome could not be verified safely.")
         case "output-too-large":
         case "process-crashed": return qsTr("The Audio backend response was rejected.")
         default: return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
@@ -234,6 +294,104 @@ Item {
                     if (button)
                         button.enabled = root.pendingMoveRequestedDevice !== "" && root.pendingMoveRequestedDevice !== root.pendingMoveOriginalDevice
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: volumeDialog
+        title: qsTr("Change volume")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(Math.max(root.width - 40, 320), 520)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            volumeSpin.value = root.pendingControlRequestedVolume
+            const button = standardButton(Dialog.Ok)
+            if (button) {
+                button.text = qsTr("Apply volume")
+                button.enabled = volumeSpin.value !== root.pendingControlOriginalVolume
+            }
+        }
+        onAccepted: {
+            root.pendingControlRequestedVolume = volumeSpin.value
+            root.applyPendingControl()
+        }
+        onRejected: root.clearPendingControl()
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                text: root.pendingControlLabel
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            SpinBox {
+                id: volumeSpin
+                Layout.fillWidth: true
+                from: 0
+                to: 100
+                editable: true
+                textFromValue: function(value, locale) { return Number(value).toLocaleString(locale, "f", 0) + "%" }
+                valueFromText: function(text, locale) { return Number.fromLocaleString(locale, text.replace("%", "")) }
+                onValueModified: {
+                    root.pendingControlRequestedVolume = value
+                    const button = volumeDialog.standardButton(Dialog.Ok)
+                    if (button)
+                        button.enabled = value !== root.pendingControlOriginalVolume
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Volume is capped at 100% to avoid software amplification.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.controlBoundaryText()
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
+        }
+    }
+
+    Dialog {
+        id: muteDialog
+        title: root.pendingControlRequestedMuted ? qsTr("Mute Audio item") : qsTr("Unmute Audio item")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(Math.max(root.width - 40, 320), 520)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            const button = standardButton(Dialog.Ok)
+            if (button)
+                button.text = root.pendingControlRequestedMuted ? qsTr("Mute") : qsTr("Unmute")
+        }
+        onAccepted: root.applyPendingControl()
+        onRejected: root.clearPendingControl()
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                text: root.pendingControlLabel
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.pendingControlRequestedMuted
+                      ? qsTr("Mute only this selected Audio item?")
+                      : qsTr("Unmute only this selected Audio item?")
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.controlBoundaryText()
+                wrapMode: Text.WordWrap
+                opacity: 0.7
             }
         }
     }
@@ -344,11 +502,20 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.backend ? root.backend.audioAvailable : false
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             clip: true
 
             ColumnLayout {
                 width: parent.width
                 spacing: 14
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.controlBoundaryText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
 
                 Label { text: qsTr("Outputs"); font.bold: true }
                 Repeater {
@@ -361,10 +528,27 @@ Item {
                             anchors.fill: parent
                             Label {
                                 Layout.fillWidth: true
+                                Layout.minimumWidth: 0
                                 text: outputRow.modelData.label
                                 elide: Text.ElideRight
                             }
                             Label { text: outputRow.modelData.muted ? qsTr("Muted") : outputRow.modelData.volumePercent + "%" }
+                            Button {
+                                text: qsTr("Level…")
+                                enabled: outputRow.modelData.levelControlAvailable !== false && !root.backend.audioBusy
+                                onClicked: outputLevelMenu.open()
+                                Menu {
+                                    id: outputLevelMenu
+                                    MenuItem {
+                                        text: qsTr("Volume…")
+                                        onTriggered: root.requestVolume(outputRow.modelData.id, outputRow.modelData.label, outputRow.modelData.volumePercent)
+                                    }
+                                    MenuItem {
+                                        text: outputRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
+                                        onTriggered: root.requestMute(outputRow.modelData.id, outputRow.modelData.label, outputRow.modelData.muted)
+                                    }
+                                }
+                            }
                             Button {
                                 text: outputRow.modelData.default ? qsTr("Default") : qsTr("Set")
                                 enabled: !outputRow.modelData.default && !root.backend.audioBusy
@@ -405,10 +589,27 @@ Item {
                             anchors.fill: parent
                             Label {
                                 Layout.fillWidth: true
+                                Layout.minimumWidth: 0
                                 text: inputRow.modelData.label
                                 elide: Text.ElideRight
                             }
                             Label { text: inputRow.modelData.muted ? qsTr("Muted") : inputRow.modelData.volumePercent + "%" }
+                            Button {
+                                text: qsTr("Level…")
+                                enabled: inputRow.modelData.levelControlAvailable !== false && !root.backend.audioBusy
+                                onClicked: inputLevelMenu.open()
+                                Menu {
+                                    id: inputLevelMenu
+                                    MenuItem {
+                                        text: qsTr("Volume…")
+                                        onTriggered: root.requestVolume(inputRow.modelData.id, inputRow.modelData.label, inputRow.modelData.volumePercent)
+                                    }
+                                    MenuItem {
+                                        text: inputRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
+                                        onTriggered: root.requestMute(inputRow.modelData.id, inputRow.modelData.label, inputRow.modelData.muted)
+                                    }
+                                }
+                            }
                             Button {
                                 text: inputRow.modelData.default ? qsTr("Default") : qsTr("Set")
                                 enabled: !inputRow.modelData.default && !root.backend.audioBusy
@@ -452,14 +653,30 @@ Item {
                         Layout.fillWidth: true
                         RowLayout {
                             anchors.fill: parent
-                            Label { Layout.fillWidth: true; text: streamRow.modelData.label; elide: Text.ElideRight }
+                            Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: streamRow.modelData.label; elide: Text.ElideRight }
                             Label { text: streamRow.modelData.direction === "playback" ? qsTr("Playback") : qsTr("Recording") }
                             Label {
                                 Layout.maximumWidth: 180
                                 text: root.endpointLabel(streamRow.modelData.target)
                                 elide: Text.ElideRight
                             }
-                            Label { text: streamRow.modelData.volumePercent + "%" }
+                            Label { text: streamRow.modelData.muted ? qsTr("Muted") : streamRow.modelData.volumePercent + "%" }
+                            Button {
+                                text: qsTr("Level…")
+                                enabled: streamRow.modelData.levelControlAvailable && !root.backend.audioBusy
+                                onClicked: streamLevelMenu.open()
+                                Menu {
+                                    id: streamLevelMenu
+                                    MenuItem {
+                                        text: qsTr("Volume…")
+                                        onTriggered: root.requestVolume(streamRow.modelData.id, streamRow.modelData.label, streamRow.modelData.volumePercent)
+                                    }
+                                    MenuItem {
+                                        text: streamRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
+                                        onTriggered: root.requestMute(streamRow.modelData.id, streamRow.modelData.label, streamRow.modelData.muted)
+                                    }
+                                }
+                            }
                             Button {
                                 text: qsTr("Move…")
                                 enabled: streamRow.modelData.moveAvailable && !root.backend.audioBusy

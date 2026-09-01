@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0-alpha.1
+
+- Add independently planned and acknowledged volume and mute transactions for
+  one opaque output, input, playback-stream or recording-stream target.
+- Cap requested volume at 100% while retaining bounded original values through
+  999% solely for exact rollback; reject raw backend identities and untyped
+  values before mutation.
+- Bind each plan to the target kind, backend identity, stream process instance
+  when applicable, original value and requested value through an opaque cohort.
+- Repeat preflight before one fixed `pactl` setter, require postflight identity
+  and value verification, and never infer success from command exit alone.
+- Freshly revalidate identity and observed value before exact-original rollback
+  when an uncertain command visibly changed the target; never compensate an
+  intervening value, and report failed or unverifiable rollback without success.
+- Add strict plan/receipt schemas and independent Qt decoding, plus adapter-owned
+  plan, acknowledgement, apply and complete refresh sequencing, including a
+  receipt-validated `AlreadySet` path that invokes no `pactl` setter.
+- Add explicit QML confirmation for volume and mute while keeping cohorts,
+  acknowledgement, raw endpoint names, stream indexes and command construction
+  out of presentation code.
+- State and enforce that controls do not start playback or capture and do not
+  change routing, defaults, profiles or durable policy.
+- Add endpoint/stream fixtures covering success, no-op, stale state, invalid
+  authority, false success, timeout, identity or target loss, amplified
+  pre-state restoration, external restoration, intervening values, verified
+  compensation and failed compensation.
+- Publish explicit source-defined baseline ISA notes for every production ELF
+  without using the rejected linker `-z x86-64-baseline` path.
+- Keep the candidate source-only: no installation, package promotion, live
+  volume/mute mutation, playback, capture or deployment is performed.
+
 ## 0.7.0-alpha.1
 
 - Package the existing typed Audio adapter and host-neutral feature QML as the

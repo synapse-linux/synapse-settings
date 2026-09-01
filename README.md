@@ -1,19 +1,21 @@
 # Synapse Settings
 
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 7 packages the already typed Audio adapter
-and host-neutral QML as `Synapse.Settings.Audio`, ready for an optional shell
-host without moving policy, PipeWire authority, private cohort data or
-acknowledgements into QML. The independently acknowledged one-stream move from
-Alpha 6 retains exact postflight and bounded rollback. Installation, shell
-replacement, broker activation and live qualification remain later deployment
-gates.
+new-stream Audio route broker. Alpha 8 adds separately planned, acknowledged and
+verified volume/mute control for one opaque device or active-stream target. The
+`Synapse.Settings.Audio` module keeps PipeWire authority, raw identities,
+private cohorts, acknowledgements and rollback in C11/Qt boundaries rather than
+QML. Existing-stream movement remains an independent Alpha 6 capability.
+Installation, shell replacement, broker activation, live mutation and physical
+qualification remain later deployment gates.
 
 ```bash
 make CORE_ROOT=/path/to/staged-core clean all test-all
 build/synapse-settings audio inventory --format json
 build/synapse-settings audio broker-status --format json
 build/synapse-settings audio plan-stream-move --stream PLAYBACK_ID --device OUTPUT_ID --format json
+build/synapse-settings audio plan-volume --target OUTPUT_ID --percent 40 --format json
+build/synapse-settings audio plan-mute --target PLAYBACK_ID --muted true --format json
 build/synapse-settings audio plan-default --direction output --device OUTPUT_ID --format json
 build/synapse-settings audio policy show --format json
 build/synapse-settings audio resolve --path /canonical/application --direction output --format json
@@ -32,6 +34,10 @@ Audio capabilities in this slice:
 - bounded PipeWire-Pulse outputs, physical inputs, cards and active streams;
 - stable opaque endpoint and stream identities;
 - guarded, planned and verified default output/input selection;
+- one-target device/stream volume and mute planning, exact acknowledgement,
+  postflight verification and identity-safe exact-original compensation;
+- requested volume bounded to 0–100% with no software amplification, implicit
+  playback, capture, routing, profile or durable-policy change;
 - private application rules for a selected active process, exact executable or
   canonical directory prefix;
 - simultaneous output and input rules;
@@ -72,12 +78,15 @@ opaque cohort, requires the exact original endpoint and acknowledgement, repeats
 preflight, and returns a dedicated receipt. No persistent rule is created.
 
 `make install` stages a hardened systemd user unit but does not enable or start
-it. The current source candidate and QML module were not installed, enabled or run
-against live Audio. Existing-stream planning and movement were exercised only through the
-compile-time test `pactl` override; no live stream was moved. Fixture tests cover successful playback and recording moves, every reachable
-typed preflight refusal, stale cohorts, wrong original targets, endpoint drift,
-timeouts, false backend success, stream and identity loss, unavailable
-verification and verified rollback. Policy receipts still describe policy
+it. The current source candidate and QML module were not installed, enabled or
+run against live Audio. Existing-stream movement and level-control transactions
+were exercised only through the compile-time test `pactl` override; no live
+stream, volume or mute state was changed. Fixtures cover device and stream
+controls, playback and recording moves, typed preflight refusal, stale cohorts,
+wrong originals, endpoint drift, timeout, false backend success, target or
+identity loss, unavailable verification, amplified pre-state restoration,
+external restoration, intervening values, verified rollback and failed rollback.
+Policy receipts still describe policy
 persistence only and therefore continue to report `routingApplied=false`.
 Settings obtains runtime state through
 `audio broker-status`, which sends one fixed read-only request to the broker's

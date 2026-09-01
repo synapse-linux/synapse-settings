@@ -56,6 +56,18 @@ Module {
             Parameter { name: "requestedDeviceId"; type: "string" }
         }
         Method {
+            name: "setAudioVolume"
+            type: "bool"
+            Parameter { name: "targetId"; type: "string" }
+            Parameter { name: "percent"; type: "int" }
+        }
+        Method {
+            name: "setAudioMuted"
+            type: "bool"
+            Parameter { name: "targetId"; type: "string" }
+            Parameter { name: "muted"; type: "bool" }
+        }
+        Method {
             name: "chooseAudioProcessRule"
             type: "bool"
             Parameter { name: "direction"; type: "string" }

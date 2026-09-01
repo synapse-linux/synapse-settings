@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #if defined(__x86_64__)
-// Shared objects do not receive the executable startup note. Publish explicit
-// GNU_PROPERTY_X86_ISA_1_NEEDED (0xc0008002) and ISA_1_USED (0xc0010002)
-// properties with the baseline bit.
+// Publish explicit GNU_PROPERTY_X86_ISA_1_NEEDED and ISA_1_USED baseline
+// properties. The companion linker script replaces executable startup notes
+// without relying on the unsafe linker -z x86-64-baseline path.
 __asm__(".pushsection .note.synapse.gnu.property,\"a\",@note\n"
         ".p2align 3\n"
         ".long 4\n"

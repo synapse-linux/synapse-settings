@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapseos.dev/schemas/settings/audio-control-plan-v1.schema.json",
+  "title": "Synapse Settings Audio control plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "target", "targetType", "control",
+    "originalValue", "requestedValue", "cohort", "changed",
+    "stateAuthority", "requiresAcknowledgement", "singleTarget",
+    "safeVolumeMaximumPercent", "postflightRequired",
+    "rollbackOnUnverified", "playbackStarted", "captureStarted",
+    "profileChanged", "routingChanged", "applied", "bounded"
+  ],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-control-plan/v1"},
+    "status": {"const": "Planned"},
+    "target": {
+      "type": "string",
+      "pattern": "^(output|input)-[0-9a-f]{16}$|^(playback|recording)-(0|[1-9][0-9]{0,9})$"
+    },
+    "targetType": {"enum": ["output", "input", "playback", "recording"]},
+    "control": {"enum": ["volume", "mute"]},
+    "originalValue": {},
+    "requestedValue": {},
+    "cohort": {"type": "string", "pattern": "^control-[0-9a-f]{16}$"},
+    "changed": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-control/v1"},
+    "singleTarget": {"const": true},
+    "safeVolumeMaximumPercent": {"const": 100},
+    "postflightRequired": {"const": true},
+    "rollbackOnUnverified": {"const": true},
+    "playbackStarted": {"const": false},
+    "captureStarted": {"const": false},
+    "profileChanged": {"const": false},
+    "routingChanged": {"const": false},
+    "applied": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"control": {"const": "volume"}}},
+      "then": {
+        "properties": {
+          "originalValue": {"type": "integer", "minimum": 0, "maximum": 999},
+          "requestedValue": {"type": "integer", "minimum": 0, "maximum": 100}
+        }
+      },
+      "else": {
+        "properties": {
+          "originalValue": {"type": "boolean"},
+          "requestedValue": {"type": "boolean"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "output"}}},
+      "then": {"properties": {"target": {"pattern": "^output-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "input"}}},
+      "then": {"properties": {"target": {"pattern": "^input-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "playback"}}},
+      "then": {"properties": {"target": {"pattern": "^playback-(0|[1-9][0-9]{0,9})$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "recording"}}},
+      "then": {"properties": {"target": {"pattern": "^recording-(0|[1-9][0-9]{0,9})$"}}}
+    }
+  ]
+}

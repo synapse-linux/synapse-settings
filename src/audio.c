@@ -32,6 +32,8 @@
 #define AUDIO_LABEL_LIMIT 255U
 #define AUDIO_ACK "synapse-settings/audio-default/v1"
 #define AUDIO_STREAM_MOVE_ACK "synapse-settings/audio-existing-stream-move/v1"
+#define AUDIO_CONTROL_ACK "synapse-settings/audio-control/v1"
+#define AUDIO_SAFE_VOLUME_MAXIMUM 100
 
 typedef struct {
   char raw_name[SETTINGS_FIELD_LIMIT + 1U];
@@ -112,6 +114,16 @@ static void audio_usage(FILE *out) {
         "--device ID [--format text|json]\n"
         "  synapse-settings audio set-default --direction output|input "
         "--device ID --ack " AUDIO_ACK " [--format text|json]\n"
+        "  synapse-settings audio plan-volume --target ID --percent 0..100 "
+        "[--format text|json]\n"
+        "  synapse-settings audio set-volume --target ID --from-percent "
+        "0..999 --percent 0..100 --cohort ID --ack " AUDIO_CONTROL_ACK " "
+        "[--format text|json]\n"
+        "  synapse-settings audio plan-mute --target ID --muted true|false "
+        "[--format text|json]\n"
+        "  synapse-settings audio set-mute --target ID --from-muted "
+        "true|false --muted true|false --cohort ID --ack " AUDIO_CONTROL_ACK " "
+        "[--format text|json]\n"
         "  synapse-settings audio policy show [--format text|json]\n"
         "  synapse-settings audio policy set-rule --match "
         "executable|directory --path PATH --direction output|input "
@@ -1097,6 +1109,8 @@ typedef struct {
   pid_t process_pid;
   uint64_t process_start_time;
   int backend_index;
+  int volume_percent;
+  int muted;
   int requested_available;
 } audio_broker_stream_state;
 
@@ -1199,6 +1213,8 @@ static int load_broker_stream_state(const char *stream_id,
   }
   state->process_pid = stream->process_pid;
   state->backend_index = stream->backend_index;
+  state->volume_percent = stream->volume_percent;
+  state->muted = stream->muted;
   if (copy_bounded(state->stream, sizeof(state->stream), stream_id) != 0 ||
       trusted_process_executable(stream->process_pid, state->executable,
                                  sizeof(state->executable),
@@ -1833,6 +1849,8 @@ static int settings_audio_stream_move_command(int argc, char **argv) {
              : 1;
 }
 
+#include "audio_control.inc"
+
 static int execute_default(const char *direction,
                            const audio_endpoint *endpoint) {
   const char *pactl = pactl_binary();
@@ -1859,6 +1877,10 @@ int settings_audio_command(int argc, char **argv) {
   if (strcmp(argv[1], "plan-stream-move") == 0 ||
       strcmp(argv[1], "move-stream") == 0)
     return settings_audio_stream_move_command(argc, argv);
+  if (strcmp(argv[1], "plan-volume") == 0 ||
+      strcmp(argv[1], "set-volume") == 0 || strcmp(argv[1], "plan-mute") == 0 ||
+      strcmp(argv[1], "set-mute") == 0)
+    return settings_audio_control_command(argc, argv);
   if (strcmp(argv[1], "inventory") == 0) {
     const char *format = NULL;
     if (parse_format(argc, argv, 2, &format) != 0) {

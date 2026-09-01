@@ -36,7 +36,13 @@ public:
         QByteArrayLiteral("SYNAPSE_AUDIO_ROUTE_POLICY"),
         QByteArrayLiteral("SYNAPSE_SETTINGS_TEST_BACKEND"),
         QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_LOG"),
-        QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_MODE")};
+        QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_MODE"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_CONTROL_LOG"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_CONTROL_MODE"),
+        QByteArrayLiteral("SYNAPSE_ADAPTER_REAL_BACKEND"),
+        QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_RESPONSE"),
+        QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_EXIT"),
+        QByteArrayLiteral("SYNAPSE_ADAPTER_WRAPPER_LOG")};
     for (const QByteArray &name : names) {
       names_.append(name);
       values_.append(qgetenv(name.constData()));
@@ -167,6 +173,22 @@ public:
         "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\"; "
         "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != mutate-fail ] || "
         "exit 65 ;;\n"
+        "  'set-sink-volume sink.a 35%') "
+        "[ -z \"${SYNAPSE_AUDIO_CONTROL_LOG:-}\" ] || printf "
+        "'volume\\tsink.a\\t35%%\\n' >>\"$SYNAPSE_AUDIO_CONTROL_LOG\"; "
+        "sed '0,/\"value\":32768/s//\"value\":22938/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.json\" ;;\n"
+        "  'set-sink-input-mute 30 1') "
+        "[ -z \"${SYNAPSE_AUDIO_CONTROL_LOG:-}\" ] || printf "
+        "'mute\\t30\\t1\\n' >>\"$SYNAPSE_AUDIO_CONTROL_LOG\"; "
+        "sed '0,/\"mute\":false/s//\"mute\":true/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\" ;;\n"
         "  'move-sink-input 30 sink.b') "
         "[ -z \"${SYNAPSE_AUDIO_MOVE_LOG:-}\" ] || printf 'sink.b\\n' "
         ">>\"$SYNAPSE_AUDIO_MOVE_LOG\"; "
@@ -191,6 +213,7 @@ public:
   QString executable() const { return executable_; }
   QString applicationDirectory() const { return applicationDirectory_; }
   QString moveLog() const { return root_ + QStringLiteral("/move.log"); }
+  QString controlLog() const { return root_ + QStringLiteral("/control.log"); }
   QString policy() const { return policy_; }
 
   void activate() const {
@@ -541,6 +564,247 @@ private slots:
         QStringLiteral("output-0123456789abcdef"),
         QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
         &changed, &rollbackAttempted, &rollbackVerified, &error));
+
+    QJsonObject controlPlanObject{
+        {QStringLiteral("schema"),
+         QStringLiteral("synapse.settings.audio-control-plan/v1")},
+        {QStringLiteral("status"), QStringLiteral("Planned")},
+        {QStringLiteral("target"), QStringLiteral("output-0123456789abcdef")},
+        {QStringLiteral("targetType"), QStringLiteral("output")},
+        {QStringLiteral("control"), QStringLiteral("volume")},
+        {QStringLiteral("originalValue"), 50},
+        {QStringLiteral("requestedValue"), 40},
+        {QStringLiteral("cohort"), QStringLiteral("control-0123456789abcdef")},
+        {QStringLiteral("changed"), true},
+        {QStringLiteral("stateAuthority"),
+         QStringLiteral("pipewire-pulse-model")},
+        {QStringLiteral("requiresAcknowledgement"),
+         QStringLiteral("synapse-settings/audio-control/v1")},
+        {QStringLiteral("singleTarget"), true},
+        {QStringLiteral("safeVolumeMaximumPercent"), 100},
+        {QStringLiteral("postflightRequired"), true},
+        {QStringLiteral("rollbackOnUnverified"), true},
+        {QStringLiteral("playbackStarted"), false},
+        {QStringLiteral("captureStarted"), false},
+        {QStringLiteral("profileChanged"), false},
+        {QStringLiteral("routingChanged"), false},
+        {QStringLiteral("applied"), false},
+        {QStringLiteral("bounded"), true},
+    };
+    QVERIFY(AudioContracts::decodeControlPlan(
+        QJsonDocument(controlPlanObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &cohort, &changed, &error));
+    QCOMPARE(cohort, QStringLiteral("control-0123456789abcdef"));
+    QVERIFY(changed);
+    QJsonObject invalidControlPlan = controlPlanObject;
+    invalidControlPlan.insert(QStringLiteral("requestedValue"), true);
+    QVERIFY(!AudioContracts::decodeControlPlan(
+        QJsonDocument(invalidControlPlan).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &cohort, &changed, &error));
+    invalidControlPlan = controlPlanObject;
+    invalidControlPlan.insert(QStringLiteral("unknown"), 0);
+    QVERIFY(!AudioContracts::decodeControlPlan(
+        QJsonDocument(invalidControlPlan).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &cohort, &changed, &error));
+    QVERIFY(!AudioContracts::decodeControlPlan(
+        QJsonDocument(controlPlanObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("sink.a"), QStringLiteral("volume"), QVariant(50),
+        QVariant(40), &cohort, &changed, &error));
+
+    QJsonObject mutePlanObject = controlPlanObject;
+    mutePlanObject.insert(QStringLiteral("target"),
+                          QStringLiteral("playback-30"));
+    mutePlanObject.insert(QStringLiteral("targetType"),
+                          QStringLiteral("playback"));
+    mutePlanObject.insert(QStringLiteral("control"), QStringLiteral("mute"));
+    mutePlanObject.insert(QStringLiteral("originalValue"), false);
+    mutePlanObject.insert(QStringLiteral("requestedValue"), true);
+    QVERIFY(AudioContracts::decodeControlPlan(
+        QJsonDocument(mutePlanObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("playback-30"), QStringLiteral("mute"), QVariant(false),
+        QVariant(true), &cohort, &changed, &error));
+    QVERIFY(!AudioContracts::decodeControlPlan(
+        QJsonDocument(mutePlanObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("playback-2147483648"), QStringLiteral("mute"),
+        QVariant(false), QVariant(true), &cohort, &changed, &error));
+
+    QJsonObject controlReceiptObject{
+        {QStringLiteral("schema"),
+         QStringLiteral("synapse.settings.audio-control-receipt/v1")},
+        {QStringLiteral("status"), QStringLiteral("Applied")},
+        {QStringLiteral("reason"), QJsonValue::Null},
+        {QStringLiteral("target"), QStringLiteral("output-0123456789abcdef")},
+        {QStringLiteral("targetType"), QStringLiteral("output")},
+        {QStringLiteral("control"), QStringLiteral("volume")},
+        {QStringLiteral("originalValue"), 50},
+        {QStringLiteral("requestedValue"), 40},
+        {QStringLiteral("changed"), true},
+        {QStringLiteral("mutationAttempted"), true},
+        {QStringLiteral("verified"), true},
+        {QStringLiteral("rollbackAttempted"), false},
+        {QStringLiteral("rollbackVerified"), false},
+        {QStringLiteral("stateAuthority"),
+         QStringLiteral("pipewire-pulse-model")},
+        {QStringLiteral("requiresAcknowledgement"),
+         QStringLiteral("synapse-settings/audio-control/v1")},
+        {QStringLiteral("singleTarget"), true},
+        {QStringLiteral("safeVolumeMaximumPercent"), 100},
+        {QStringLiteral("playbackStarted"), false},
+        {QStringLiteral("captureStarted"), false},
+        {QStringLiteral("profileChanged"), false},
+        {QStringLiteral("routingChanged"), false},
+        {QStringLiteral("bounded"), true},
+    };
+    QString controlStatus;
+    QString controlReason;
+    QVERIFY(AudioContracts::decodeControlReceipt(
+        QJsonDocument(controlReceiptObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    QCOMPARE(controlStatus, QStringLiteral("Applied"));
+    QVERIFY(controlReason.isEmpty() && changed && !rollbackAttempted &&
+            !rollbackVerified);
+
+    QJsonObject alreadyControl = controlReceiptObject;
+    alreadyControl.insert(QStringLiteral("status"),
+                          QStringLiteral("AlreadySet"));
+    alreadyControl.insert(QStringLiteral("requestedValue"), 50);
+    alreadyControl.insert(QStringLiteral("changed"), false);
+    alreadyControl.insert(QStringLiteral("mutationAttempted"), false);
+    QVERIFY(AudioContracts::decodeControlReceipt(
+        QJsonDocument(alreadyControl).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(50), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    QCOMPARE(controlStatus, QStringLiteral("AlreadySet"));
+    QVERIFY(controlReason.isEmpty() && !changed && !rollbackAttempted &&
+            !rollbackVerified);
+
+    const QStringList controlRefusedReasons = {
+        QStringLiteral("audio-unavailable"),
+        QStringLiteral("target-vanished"),
+        QStringLiteral("process-unavailable"),
+        QStringLiteral("original-value-mismatch"),
+        QStringLiteral("control-cohort-changed"),
+    };
+    for (const QString &refusedReason : controlRefusedReasons) {
+      QJsonObject refusedControl = controlReceiptObject;
+      refusedControl.insert(QStringLiteral("status"),
+                            QStringLiteral("Refused"));
+      refusedControl.insert(QStringLiteral("reason"), refusedReason);
+      refusedControl.insert(QStringLiteral("changed"), false);
+      refusedControl.insert(QStringLiteral("mutationAttempted"), false);
+      refusedControl.insert(QStringLiteral("verified"), false);
+      QVERIFY2(AudioContracts::decodeControlReceipt(
+                   QJsonDocument(refusedControl).toJson(QJsonDocument::Compact),
+                   QStringLiteral("output-0123456789abcdef"),
+                   QStringLiteral("volume"), QVariant(50), QVariant(40),
+                   &controlStatus, &controlReason, &changed, &rollbackAttempted,
+                   &rollbackVerified, &error),
+               qPrintable(refusedReason));
+      QCOMPARE(controlStatus, QStringLiteral("Refused"));
+      QCOMPARE(controlReason, refusedReason);
+    }
+
+    const QStringList controlFailedReasons = {
+        QStringLiteral("target-vanished"),
+        QStringLiteral("mutation-timeout"),
+        QStringLiteral("mutation-failed"),
+        QStringLiteral("verification-failed"),
+        QStringLiteral("verification-unavailable"),
+        QStringLiteral("target-identity-changed"),
+    };
+    for (const QString &failedReason : controlFailedReasons) {
+      QJsonObject failedControl = controlReceiptObject;
+      failedControl.insert(QStringLiteral("status"), QStringLiteral("Failed"));
+      failedControl.insert(QStringLiteral("reason"), failedReason);
+      failedControl.insert(QStringLiteral("changed"), false);
+      failedControl.insert(QStringLiteral("verified"), false);
+      QVERIFY2(AudioContracts::decodeControlReceipt(
+                   QJsonDocument(failedControl).toJson(QJsonDocument::Compact),
+                   QStringLiteral("output-0123456789abcdef"),
+                   QStringLiteral("volume"), QVariant(50), QVariant(40),
+                   &controlStatus, &controlReason, &changed, &rollbackAttempted,
+                   &rollbackVerified, &error),
+               qPrintable(failedReason));
+      QCOMPARE(controlStatus, QStringLiteral("Failed"));
+      QCOMPARE(controlReason, failedReason);
+    }
+
+    QJsonObject restoredControl = controlReceiptObject;
+    restoredControl.insert(QStringLiteral("status"), QStringLiteral("Failed"));
+    restoredControl.insert(QStringLiteral("changed"), false);
+    restoredControl.insert(QStringLiteral("verified"), false);
+    restoredControl.insert(QStringLiteral("rollbackAttempted"), true);
+    restoredControl.insert(QStringLiteral("rollbackVerified"), true);
+    for (const QString &restoredReason :
+         {QStringLiteral("mutation-timeout"), QStringLiteral("mutation-failed"),
+          QStringLiteral("verification-failed")}) {
+      restoredControl.insert(QStringLiteral("reason"), restoredReason);
+      QVERIFY2(
+          AudioContracts::decodeControlReceipt(
+              QJsonDocument(restoredControl).toJson(QJsonDocument::Compact),
+              QStringLiteral("output-0123456789abcdef"),
+              QStringLiteral("volume"), QVariant(50), QVariant(40),
+              &controlStatus, &controlReason, &changed, &rollbackAttempted,
+              &rollbackVerified, &error),
+          qPrintable(restoredReason));
+      QCOMPARE(controlReason, restoredReason);
+      QVERIFY(rollbackAttempted && rollbackVerified && !changed);
+    }
+
+    QJsonObject rollbackFailedControl = restoredControl;
+    rollbackFailedControl.insert(QStringLiteral("reason"),
+                                 QStringLiteral("rollback-failed"));
+    rollbackFailedControl.insert(QStringLiteral("rollbackVerified"), false);
+    QVERIFY(AudioContracts::decodeControlReceipt(
+        QJsonDocument(rollbackFailedControl).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    QVERIFY(rollbackAttempted && !rollbackVerified);
+    rollbackFailedControl.insert(QStringLiteral("rollbackAttempted"), false);
+    QVERIFY(!AudioContracts::decodeControlReceipt(
+        QJsonDocument(rollbackFailedControl).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+
+    QJsonObject invalidControlReceipt = restoredControl;
+    invalidControlReceipt.insert(QStringLiteral("reason"),
+                                 QStringLiteral("mutation-failed"));
+    invalidControlReceipt.insert(QStringLiteral("rollbackAttempted"), false);
+    QVERIFY(!AudioContracts::decodeControlReceipt(
+        QJsonDocument(invalidControlReceipt).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    invalidControlReceipt = controlReceiptObject;
+    invalidControlReceipt.insert(QStringLiteral("playbackStarted"), true);
+    QVERIFY(!AudioContracts::decodeControlReceipt(
+        QJsonDocument(invalidControlReceipt).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    invalidControlReceipt = controlReceiptObject;
+    invalidControlReceipt.insert(QStringLiteral("requestedValue"), 101);
+    QVERIFY(!AudioContracts::decodeControlReceipt(
+        QJsonDocument(invalidControlReceipt).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
+    invalidControlReceipt = controlReceiptObject;
+    invalidControlReceipt.insert(QStringLiteral("targetType"),
+                                 QStringLiteral("input"));
+    QVERIFY(!AudioContracts::decodeControlReceipt(
+        QJsonDocument(invalidControlReceipt).toJson(QJsonDocument::Compact),
+        QStringLiteral("output-0123456789abcdef"), QStringLiteral("volume"),
+        QVariant(50), QVariant(40), &controlStatus, &controlReason, &changed,
+        &rollbackAttempted, &rollbackVerified, &error));
   }
 
   void loadAndGuardedMutations() {
@@ -597,6 +861,55 @@ private slots:
                 .toMap()
                 .value(QStringLiteral("moveAvailable"))
                 .toBool());
+    QVERIFY(adapter.audioOutputs()
+                .constFirst()
+                .toMap()
+                .value(QStringLiteral("levelControlAvailable"))
+                .toBool());
+    QVERIFY(adapter.audioStreams()
+                .constFirst()
+                .toMap()
+                .value(QStringLiteral("levelControlAvailable"))
+                .toBool());
+
+    QVERIFY(writeFile(fixture.controlLog(), QByteArray()));
+    qputenv("SYNAPSE_AUDIO_CONTROL_LOG", fixture.controlLog().toUtf8());
+    QVERIFY(adapter.setAudioVolume(integratedOutput, 35));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
+                              QStringLiteral("audio-volume-applied"), 15000);
+    QCOMPARE(adapter.audioOutputs()
+                 .constFirst()
+                 .toMap()
+                 .value(QStringLiteral("volumePercent"))
+                 .toInt(),
+             35);
+    QFile controlLog(fixture.controlLog());
+    QVERIFY(controlLog.open(QIODevice::ReadOnly));
+    QCOMPARE(controlLog.readAll(), QByteArrayLiteral("volume\tsink.a\t35%\n"));
+    controlLog.close();
+
+    QVERIFY(adapter.setAudioVolume(integratedOutput, 35));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
+                              QStringLiteral("audio-volume-unchanged"), 15000);
+    QVERIFY(controlLog.open(QIODevice::ReadOnly));
+    QCOMPARE(controlLog.readAll(), QByteArrayLiteral("volume\tsink.a\t35%\n"));
+    controlLog.close();
+
+    QVERIFY(adapter.setAudioMuted(activeStream, true));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
+                              QStringLiteral("audio-mute-applied"), 15000);
+    QVERIFY(adapter.audioStreams()
+                .constFirst()
+                .toMap()
+                .value(QStringLiteral("muted"))
+                .toBool());
+    QVERIFY(controlLog.open(QIODevice::ReadOnly));
+    QCOMPARE(controlLog.readAll(),
+             QByteArrayLiteral("volume\tsink.a\t35%\nmute\t30\t1\n"));
+    controlLog.close();
+    QVERIFY(!adapter.setAudioVolume(integratedOutput, 101));
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("selection-invalid"));
+
     QVERIFY(writeFile(fixture.moveLog(), QByteArray()));
     qputenv("SYNAPSE_AUDIO_MOVE_LOG", fixture.moveLog().toUtf8());
     QSignalSpy operations(&adapter, &AudioAdapter::audioOperationFinished);
@@ -716,6 +1029,122 @@ private slots:
     const QByteArray serialized = policyDocument.toJson(QJsonDocument::Compact);
     QVERIFY(!serialized.contains("\"pid\""));
     QVERIFY(!serialized.contains("processName"));
+  }
+
+  void controlReceiptExitCodeConsistency() {
+    ScopedEnvironment restore;
+    AudioFixture fixture;
+    QTemporaryDir wrapperDirectory;
+    QVERIFY(fixture.valid());
+    QVERIFY(wrapperDirectory.isValid());
+    fixture.activate();
+
+    const QString wrapper =
+        wrapperDirectory.path() + QStringLiteral("/backend");
+    const QString response =
+        wrapperDirectory.path() + QStringLiteral("/response.json");
+    const QString log = wrapperDirectory.path() + QStringLiteral("/argv.log");
+    const QByteArray wrapperScript = QByteArrayLiteral(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "printf '%s\\n' \"$*\" >>\"$SYNAPSE_ADAPTER_WRAPPER_LOG\"\n"
+        "if [ \"${1-} ${2-}\" = 'audio set-volume' ] && "
+        "[ -n \"${SYNAPSE_ADAPTER_OVERRIDE_RESPONSE:-}\" ]; then\n"
+        "  cat \"$SYNAPSE_ADAPTER_OVERRIDE_RESPONSE\"\n"
+        "  exit \"$SYNAPSE_ADAPTER_OVERRIDE_EXIT\"\n"
+        "fi\n"
+        "exec \"$SYNAPSE_ADAPTER_REAL_BACKEND\" \"$@\"\n");
+    QVERIFY(writeFile(wrapper, wrapperScript,
+                      QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    QVERIFY(writeFile(log, QByteArray()));
+    qputenv("SYNAPSE_ADAPTER_REAL_BACKEND", testBackend().toUtf8());
+    qputenv("SYNAPSE_ADAPTER_WRAPPER_LOG", log.toUtf8());
+
+    AudioAdapter adapter(
+        wrapper, [](const QString &) { return QString(); }, 5000);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 10000);
+    const QString target = adapter.audioOutputs()
+                               .constFirst()
+                               .toMap()
+                               .value(QStringLiteral("id"))
+                               .toString();
+
+    const auto receipt = [&target](const QString &status, const QString &reason,
+                                   bool changed, bool mutationAttempted,
+                                   bool verified, bool rollbackAttempted,
+                                   bool rollbackVerified) {
+      QJsonObject value{
+          {QStringLiteral("schema"),
+           QStringLiteral("synapse.settings.audio-control-receipt/v1")},
+          {QStringLiteral("status"), status},
+          {QStringLiteral("reason"), reason.isEmpty()
+                                         ? QJsonValue(QJsonValue::Null)
+                                         : QJsonValue(reason)},
+          {QStringLiteral("target"), target},
+          {QStringLiteral("targetType"), QStringLiteral("output")},
+          {QStringLiteral("control"), QStringLiteral("volume")},
+          {QStringLiteral("originalValue"), 50},
+          {QStringLiteral("requestedValue"), 40},
+          {QStringLiteral("changed"), changed},
+          {QStringLiteral("mutationAttempted"), mutationAttempted},
+          {QStringLiteral("verified"), verified},
+          {QStringLiteral("rollbackAttempted"), rollbackAttempted},
+          {QStringLiteral("rollbackVerified"), rollbackVerified},
+          {QStringLiteral("stateAuthority"),
+           QStringLiteral("pipewire-pulse-model")},
+          {QStringLiteral("requiresAcknowledgement"),
+           QStringLiteral("synapse-settings/audio-control/v1")},
+          {QStringLiteral("singleTarget"), true},
+          {QStringLiteral("safeVolumeMaximumPercent"), 100},
+          {QStringLiteral("playbackStarted"), false},
+          {QStringLiteral("captureStarted"), false},
+          {QStringLiteral("profileChanged"), false},
+          {QStringLiteral("routingChanged"), false},
+          {QStringLiteral("bounded"), true},
+      };
+      return QJsonDocument(value).toJson(QJsonDocument::Compact) + '\n';
+    };
+    const auto applyOverride = [&](const QByteArray &payload, int exitCode,
+                                   const QString &expectedError) {
+      QVERIFY(writeFile(response, payload));
+      qputenv("SYNAPSE_ADAPTER_OVERRIDE_RESPONSE", response.toUtf8());
+      qputenv("SYNAPSE_ADAPTER_OVERRIDE_EXIT", QByteArray::number(exitCode));
+      QVERIFY(adapter.setAudioVolume(target, 40));
+      QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(), expectedError, 15000);
+      QVERIFY(!adapter.audioBusy());
+      QCOMPARE(adapter.audioOutputs()
+                   .constFirst()
+                   .toMap()
+                   .value(QStringLiteral("volumePercent"))
+                   .toInt(),
+               50);
+    };
+
+    applyOverride(receipt(QStringLiteral("Applied"), QString(), true, true,
+                          true, false, false),
+                  1, QStringLiteral("contract-invalid"));
+    applyOverride(receipt(QStringLiteral("Refused"),
+                          QStringLiteral("control-cohort-changed"), false,
+                          false, false, false, false),
+                  1, QStringLiteral("audio-control-refused"));
+    applyOverride(receipt(QStringLiteral("Failed"),
+                          QStringLiteral("mutation-failed"), false, true, false,
+                          true, true),
+                  1, QStringLiteral("audio-control-restored"));
+    applyOverride(receipt(QStringLiteral("Failed"),
+                          QStringLiteral("mutation-failed"), false, true, false,
+                          false, false),
+                  0, QStringLiteral("contract-invalid"));
+
+    QFile argvLog(log);
+    QVERIFY(argvLog.open(QIODevice::ReadOnly));
+    int applyCount = 0;
+    for (const QByteArray &line : argvLog.readAll().split('\n'))
+      if (line.startsWith("audio set-volume "))
+        applyCount++;
+    QCOMPARE(applyCount, 4);
   }
 
   void applyTransportFailureRefreshesSnapshot() {

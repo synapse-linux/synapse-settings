@@ -89,9 +89,12 @@ assert value['schema']=='synapse.settings.sections/v2'
 assert [x['id'] for x in value['sections']]==['layers','audio','input','themes']
 assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections'])
 PY
-"$binary" sections --format text | grep -Fq $'audio\tAudio\taudio-card\tavailable'
-[[ $($binary --version) == 'synapse-settings 0.7.0-alpha.1' ]]
-"$binary" --help | grep -Fq 'synapse-settings audio policy set-rule'
+"$binary" sections --format text >"$work/sections.txt"
+grep -Fq $'audio\tAudio\taudio-card\tavailable' "$work/sections.txt"
+[[ $($binary --version) == 'synapse-settings 0.8.0-alpha.1' ]]
+"$binary" --help >"$work/help.txt"
+grep -Fq 'synapse-settings audio policy set-rule' "$work/help.txt"
+grep -Fq 'synapse-settings audio plan-volume' "$work/help.txt"
 
 # Broker-status observation is independently read-only when no broker or policy
 # exists: it creates neither configuration nor runtime state and runs no pactl.
@@ -199,10 +202,111 @@ PY
   fi
 }
 
+control_target() {
+  local file=$1 selector=$2 identity=$3 control=$4 requested=$5
+  local mode=${SYNAPSE_AUDIO_CONTROL_MODE:-success}
+  local count=0
+  if [[ -n ${SYNAPSE_AUDIO_CONTROL_COUNT:-} ]]; then
+    [[ ! -e $SYNAPSE_AUDIO_CONTROL_COUNT ]] || read -r count <"$SYNAPSE_AUDIO_CONTROL_COUNT"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$SYNAPSE_AUDIO_CONTROL_COUNT"
+  fi
+  if [[ -n ${SYNAPSE_AUDIO_CONTROL_LOG:-} ]]; then
+    printf '%s\t%s\t%s\n' "$control" "$identity" "$requested" >>"$SYNAPSE_AUDIO_CONTROL_LOG"
+  fi
+  case "$mode" in
+    fail) exit 65 ;;
+    no-mutate-success) exit 0 ;;
+    rollback-fail)
+      if (( count > 1 )); then exit 65; fi ;;
+  esac
+  if [[ $mode == unexpected-success && $count == 1 && $control == volume ]]; then
+    requested="$(( ${requested%%%} + 1 ))%"
+  fi
+  python - "$file" "$selector" "$identity" "$control" "$requested" <<'PY'
+import json,sys
+path,selector,identity,control,requested=sys.argv[1:]
+value=json.load(open(path))
+def selected(entry):
+    return str(entry.get(selector)) == identity
+entries=[entry for entry in value if selected(entry)]
+if len(entries)!=1:
+    raise SystemExit(64)
+entry=entries[0]
+if control=='volume':
+    if not requested.endswith('%'):
+        raise SystemExit(64)
+    percent=int(requested[:-1])
+    raw=(percent*65536+50)//100
+    channels=entry.get('volume')
+    if not isinstance(channels,dict) or not channels:
+        raise SystemExit(64)
+    for channel in channels.values():
+        channel['value']=raw
+elif control=='mute':
+    if requested not in ('0','1'):
+        raise SystemExit(64)
+    entry['mute']=requested=='1'
+else:
+    raise SystemExit(64)
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  case "$mode" in
+    timeout-after-mutate) exec 1>&-; sleep 5; exit 65 ;;
+    fail-after-mutate|rollback-fail|external-restore-before-rollback|intervene-before-rollback) exit 65 ;;
+    postflight-unavailable) : >"$SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list" ;;
+    identity-change)
+      python - "$file" "$selector" "$identity" <<'PY'
+import json,sys
+path,selector,identity=sys.argv[1:];value=json.load(open(path))
+for entry in value:
+    if str(entry.get(selector))==identity:
+        entry.setdefault('properties',{})['application.process.id']='2147483647'
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+      ;;
+    vanish-after-control)
+      python - "$file" "$selector" "$identity" <<'PY'
+import json,sys
+path,selector,identity=sys.argv[1:];value=json.load(open(path))
+value=[entry for entry in value if str(entry.get(selector))!=identity]
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+      ;;
+  esac
+}
+
 case "${1-} ${2-} ${3-}" in
   '--format=json info ')
     printf '{"default_sink_name":"%s","default_source_name":"%s"}\n' "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-sink")" "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-source")" ;;
-  '--format=json list sinks') cat "$SYNAPSE_AUDIO_FIXTURES/sinks.json" ;;
+  '--format=json list sinks')
+    mode=${SYNAPSE_AUDIO_CONTROL_MODE:-}
+    if [[ $mode == external-restore-before-rollback || $mode == intervene-before-rollback ]] &&
+       [[ -n ${SYNAPSE_AUDIO_CONTROL_COUNT:-} && -e $SYNAPSE_AUDIO_CONTROL_COUNT ]]; then
+      mutation_count=0
+      read -r mutation_count <"$SYNAPSE_AUDIO_CONTROL_COUNT"
+      if [[ $mutation_count == 1 ]]; then
+        read_count=0
+        [[ ! -e $SYNAPSE_AUDIO_FIXTURES/control-read-count ]] ||
+          read -r read_count <"$SYNAPSE_AUDIO_FIXTURES/control-read-count"
+        read_count=$((read_count + 1))
+        printf '%s\n' "$read_count" >"$SYNAPSE_AUDIO_FIXTURES/control-read-count"
+        if [[ $read_count == 2 ]]; then
+          percent=43
+          [[ $mode != external-restore-before-rollback ]] || percent=50
+          python - "$SYNAPSE_AUDIO_FIXTURES/sinks.json" "$percent" <<'PY'
+import json,sys
+path,percent=sys.argv[1],int(sys.argv[2]);value=json.load(open(path))
+raw=(percent*65536+50)//100
+for entry in value:
+    if entry.get('name')=='sink.a':
+        for channel in entry['volume'].values(): channel['value']=raw
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+        fi
+      fi
+    fi
+    cat "$SYNAPSE_AUDIO_FIXTURES/sinks.json" ;;
   '--format=json list sources') cat "$SYNAPSE_AUDIO_FIXTURES/sources.json" ;;
   '--format=json list sink-inputs')
     if [[ -e $SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list ]]; then
@@ -235,6 +339,22 @@ case "${1-} ${2-} ${3-}" in
     move_stream "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" "$2" sink "$3" ;;
   'move-source-output '*)
     move_stream "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" "$2" source "$3" ;;
+  'set-sink-volume '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sinks.json" name "$2" volume "$3" ;;
+  'set-source-volume '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sources.json" name "$2" volume "$3" ;;
+  'set-sink-input-volume '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" index "$2" volume "$3" ;;
+  'set-source-output-volume '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" index "$2" volume "$3" ;;
+  'set-sink-mute '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sinks.json" name "$2" mute "$3" ;;
+  'set-source-mute '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sources.json" name "$2" mute "$3" ;;
+  'set-sink-input-mute '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" index "$2" mute "$3" ;;
+  'set-source-output-mute '*)
+    control_target "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" index "$2" mute "$3" ;;
   *) exit 64 ;;
 esac
 EOF
@@ -258,11 +378,15 @@ assert v['streams'][0]['processRuleAvailable'] is True
 assert len(v['cards'])==1 and v['cards'][0]['id'].startswith('card-')
 assert v['cards'][0]['label']=='Primary audio card' and v['cards'][0]['activeProfile']=='HiFi'
 PY
-read -r integrated_output headset_output < <(python - "$work/audio-inventory.json" <<'PY'
+read -r integrated_output headset_output builtin_input usb_input < <(python - "$work/audio-inventory.json" <<'PY'
 import json,sys
-v=json.load(open(sys.argv[1]));print(v['outputs'][0]['id'],v['outputs'][1]['id'])
+v=json.load(open(sys.argv[1]))
+print(v['outputs'][0]['id'],v['outputs'][1]['id'],
+      v['inputs'][0]['id'],v['inputs'][1]['id'])
 PY
 )
+bash "$root/tests/audio-control-run.sh" "$binary" "$work/bin/pactl-fake" \
+  "$audio" "$work" "$integrated_output" "$usb_input"
 "${AUDIO_ENV[@]}" "$binary" audio plan-default --direction output --device "$headset_output" --format json >"$work/audio-plan.json"
 python - "$work/audio-plan.json" "$headset_output" <<'PY'
 import json,sys
@@ -963,6 +1087,32 @@ pairs=[
  ('audio-route-broker-status-v1.schema.json','status-inactive.json'),
  ('audio-default-plan-v1.schema.json','audio-plan.json'),
  ('audio-default-receipt-v1.schema.json','audio-receipt.json'),
+ ('audio-control-plan-v1.schema.json','control-volume-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-volume-same-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-input-mute-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-stream-mute-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-recording-volume-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-amplified-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-external-restore-plan.json'),
+ ('audio-control-plan-v1.schema.json','control-intervening-plan.json'),
+ ('audio-control-receipt-v1.schema.json','control-volume-applied.json'),
+ ('audio-control-receipt-v1.schema.json','control-volume-same.json'),
+ ('audio-control-receipt-v1.schema.json','control-input-mute.json'),
+ ('audio-control-receipt-v1.schema.json','control-stream-mute.json'),
+ ('audio-control-receipt-v1.schema.json','control-recording-volume.json'),
+ ('audio-control-receipt-v1.schema.json','control-original-mismatch.json'),
+ ('audio-control-receipt-v1.schema.json','control-cohort-mismatch.json'),
+ ('audio-control-receipt-v1.schema.json','control-no-mutate.json'),
+ ('audio-control-receipt-v1.schema.json','control-fail-after-mutate.json'),
+ ('audio-control-receipt-v1.schema.json','control-timeout-after-mutate.json'),
+ ('audio-control-receipt-v1.schema.json','control-amplified-rollback.json'),
+ ('audio-control-receipt-v1.schema.json','control-external-restore.json'),
+ ('audio-control-receipt-v1.schema.json','control-intervening-value.json'),
+ ('audio-control-receipt-v1.schema.json','control-unexpected.json'),
+ ('audio-control-receipt-v1.schema.json','control-rollback-fail.json'),
+ ('audio-control-receipt-v1.schema.json','control-postflight-unavailable.json'),
+ ('audio-control-receipt-v1.schema.json','control-vanish-after-control.json'),
+ ('audio-control-receipt-v1.schema.json','control-identity-change.json'),
  ('audio-existing-stream-move-plan-v1.schema.json','stream-move-plan.json'),
  ('audio-existing-stream-move-plan-v1.schema.json','stream-move-plan-same.json'),
  ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-applied.json'),
@@ -994,7 +1144,20 @@ for schema_name,document_name in pairs:
  Draft202012Validator.check_schema(schema)
  Draft202012Validator(schema).validate(json.loads((work/document_name).read_text()))
 Draft202012Validator(json.loads((root/'schemas/audio-route-policy-v1.schema.json').read_text())).validate(json.loads(policy.read_text()))
+control_plan_validator=Draft202012Validator(json.loads((root/'schemas/audio-control-plan-v1.schema.json').read_text()))
+control_receipt_validator=Draft202012Validator(json.loads((root/'schemas/audio-control-receipt-v1.schema.json').read_text()))
+plan=json.loads((work/'control-volume-plan.json').read_text())
+receipt=json.loads((work/'control-volume-applied.json').read_text())
+invalid=[]
+value=dict(plan);value['targetType']='input';invalid.append((control_plan_validator,value))
+value=dict(plan);value['requestedValue']=101;invalid.append((control_plan_validator,value))
+value=dict(receipt);value['playbackStarted']=True;invalid.append((control_receipt_validator,value))
+value=dict(receipt);value.update(status='Failed',reason='rollback-failed',changed=False,verified=False,rollbackAttempted=False);invalid.append((control_receipt_validator,value))
+value=dict(receipt);value.update(status='Refused',reason='mutation-failed',changed=False,mutationAttempted=False,verified=False);invalid.append((control_receipt_validator,value))
+for validator,value in invalid:
+ assert list(validator.iter_errors(value)), value
 print(f'schema validations: {len(pairs)+1}')
+print(f'schema rejection validations: {len(invalid)}')
 PY
 
 bash -n "$root/tests/run.sh"

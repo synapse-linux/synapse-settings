@@ -36,6 +36,8 @@ constexpr char kRouteAcknowledgement[] =
     "synapse-settings/audio-route-policy/v1";
 constexpr char kStreamMoveAcknowledgement[] =
     "synapse-settings/audio-existing-stream-move/v1";
+constexpr char kControlAcknowledgement[] = "synapse-settings/audio-control/v1";
+constexpr int kSafeVolumeMaximumPercent = 100;
 
 QString defaultBackendPath() {
 #ifdef SYNAPSE_SETTINGS_GUI_TEST_HOOKS
@@ -158,6 +160,64 @@ const QRegularExpression &streamMoveCohortExpression() {
   return value;
 }
 
+const QRegularExpression &controlCohortExpression() {
+  static const QRegularExpression value(
+      QStringLiteral("^control-[0-9a-f]{16}$"));
+  return value;
+}
+
+QString audioControlTargetType(const QString &target) {
+  if (tokenMatches(target, outputTokenExpression()))
+    return QStringLiteral("output");
+  if (tokenMatches(target, inputTokenExpression()))
+    return QStringLiteral("input");
+  const QRegularExpressionMatch match = streamTokenExpression().match(target);
+  bool indexOk = false;
+  const qlonglong index = match.captured(2).toLongLong(&indexOk);
+  if (!match.hasMatch() || !indexOk || index < 0 || index > 2147483647LL)
+    return {};
+  return match.captured(1);
+}
+
+bool controlValueMatches(const QJsonValue &value, const QString &control,
+                         const QVariant &expected, bool original) {
+  if (control == QStringLiteral("volume")) {
+    if (expected.metaType().id() != QMetaType::Int)
+      return false;
+    qint64 decoded = 0;
+    const int maximum = original ? 999 : kSafeVolumeMaximumPercent;
+    return exactInteger(value, 0, maximum, &decoded) &&
+           decoded == expected.toInt();
+  }
+  return control == QStringLiteral("mute") &&
+         expected.metaType().id() == QMetaType::Bool && value.isBool() &&
+         value.toBool() == expected.toBool();
+}
+
+const QSet<QString> &controlRefusedReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("audio-unavailable"),
+      QStringLiteral("target-vanished"),
+      QStringLiteral("process-unavailable"),
+      QStringLiteral("original-value-mismatch"),
+      QStringLiteral("control-cohort-changed"),
+  };
+  return values;
+}
+
+const QSet<QString> &controlFailedReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("target-vanished"),
+      QStringLiteral("mutation-timeout"),
+      QStringLiteral("mutation-failed"),
+      QStringLiteral("verification-failed"),
+      QStringLiteral("verification-unavailable"),
+      QStringLiteral("target-identity-changed"),
+      QStringLiteral("rollback-failed"),
+  };
+  return values;
+}
+
 const QSet<QString> &streamMoveRefusedReasonIds() {
   static const QSet<QString> values = {
       QStringLiteral("audio-unavailable"),
@@ -272,6 +332,7 @@ bool decodeEndpointArray(const QJsonValue &value, const QString &direction,
     item.insert(QStringLiteral("volumePercent"), static_cast<int>(volume));
     item.insert(QStringLiteral("muted"),
                 object.value(QStringLiteral("muted")).toBool());
+    item.insert(QStringLiteral("levelControlAvailable"), true);
     decoded.append(item);
   }
   *items = std::move(decoded);
@@ -344,6 +405,7 @@ bool decodeStreams(const QJsonValue &value, const QSet<QString> &outputs,
     item.insert(QStringLiteral("moveAvailable"),
                 processRuleAvailable &&
                     target != QStringLiteral("unavailable"));
+    item.insert(QStringLiteral("levelControlAvailable"), processRuleAvailable);
     decoded.append(item);
   }
   *items = std::move(decoded);
@@ -857,6 +919,219 @@ bool decodeDefaultReceipt(const QByteArray &payload,
       changed, errorId);
 }
 
+bool decodeControlPlan(const QByteArray &payload, const QString &expectedTarget,
+                       const QString &expectedControl,
+                       const QVariant &expectedOriginalValue,
+                       const QVariant &expectedRequestedValue, QString *cohort,
+                       bool *changed, QString *errorId) {
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumReceiptBytes, &object, errorId))
+    return false;
+  const QString targetType = audioControlTargetType(expectedTarget);
+  QString decodedCohort;
+  const bool expectedChanged = expectedOriginalValue != expectedRequestedValue;
+  if (targetType.isEmpty() ||
+      (expectedControl != QStringLiteral("volume") &&
+       expectedControl != QStringLiteral("mute")) ||
+      !exactKeys(object, {"schema",
+                          "status",
+                          "target",
+                          "targetType",
+                          "control",
+                          "originalValue",
+                          "requestedValue",
+                          "cohort",
+                          "changed",
+                          "stateAuthority",
+                          "requiresAcknowledgement",
+                          "singleTarget",
+                          "safeVolumeMaximumPercent",
+                          "postflightRequired",
+                          "rollbackOnUnverified",
+                          "playbackStarted",
+                          "captureStarted",
+                          "profileChanged",
+                          "routingChanged",
+                          "applied",
+                          "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral("synapse.settings.audio-control-plan/v1") ||
+      object.value(QStringLiteral("status")).toString() !=
+          QStringLiteral("Planned") ||
+      object.value(QStringLiteral("target")).toString() != expectedTarget ||
+      object.value(QStringLiteral("targetType")).toString() != targetType ||
+      object.value(QStringLiteral("control")).toString() != expectedControl ||
+      !controlValueMatches(object.value(QStringLiteral("originalValue")),
+                           expectedControl, expectedOriginalValue, true) ||
+      !controlValueMatches(object.value(QStringLiteral("requestedValue")),
+                           expectedControl, expectedRequestedValue, false) ||
+      !boundedText(object.value(QStringLiteral("cohort")), 31, &decodedCohort,
+                   false) ||
+      !tokenMatches(decodedCohort, controlCohortExpression()) ||
+      !object.value(QStringLiteral("changed")).isBool() ||
+      object.value(QStringLiteral("changed")).toBool() != expectedChanged ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("pipewire-pulse-model") ||
+      object.value(QStringLiteral("requiresAcknowledgement")).toString() !=
+          QString::fromLatin1(kControlAcknowledgement) ||
+      !object.value(QStringLiteral("singleTarget")).isBool() ||
+      !object.value(QStringLiteral("singleTarget")).toBool() ||
+      !exactInteger(object.value(QStringLiteral("safeVolumeMaximumPercent")),
+                    kSafeVolumeMaximumPercent, kSafeVolumeMaximumPercent) ||
+      !object.value(QStringLiteral("postflightRequired")).isBool() ||
+      !object.value(QStringLiteral("postflightRequired")).toBool() ||
+      !object.value(QStringLiteral("rollbackOnUnverified")).isBool() ||
+      !object.value(QStringLiteral("rollbackOnUnverified")).toBool() ||
+      !object.value(QStringLiteral("playbackStarted")).isBool() ||
+      object.value(QStringLiteral("playbackStarted")).toBool() ||
+      !object.value(QStringLiteral("captureStarted")).isBool() ||
+      object.value(QStringLiteral("captureStarted")).toBool() ||
+      !object.value(QStringLiteral("profileChanged")).isBool() ||
+      object.value(QStringLiteral("profileChanged")).toBool() ||
+      !object.value(QStringLiteral("routingChanged")).isBool() ||
+      object.value(QStringLiteral("routingChanged")).toBool() ||
+      !object.value(QStringLiteral("applied")).isBool() ||
+      object.value(QStringLiteral("applied")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  if (cohort)
+    *cohort = decodedCohort;
+  if (changed)
+    *changed = expectedChanged;
+  return true;
+}
+
+bool decodeControlReceipt(const QByteArray &payload,
+                          const QString &expectedTarget,
+                          const QString &expectedControl,
+                          const QVariant &expectedOriginalValue,
+                          const QVariant &expectedRequestedValue,
+                          QString *status, QString *reason, bool *changed,
+                          bool *rollbackAttempted, bool *rollbackVerified,
+                          QString *errorId) {
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumReceiptBytes, &object, errorId))
+    return false;
+  const QString targetType = audioControlTargetType(expectedTarget);
+  const bool expectedChanged = expectedOriginalValue != expectedRequestedValue;
+  if (targetType.isEmpty() ||
+      (expectedControl != QStringLiteral("volume") &&
+       expectedControl != QStringLiteral("mute")) ||
+      !exactKeys(object, {"schema",
+                          "status",
+                          "reason",
+                          "target",
+                          "targetType",
+                          "control",
+                          "originalValue",
+                          "requestedValue",
+                          "changed",
+                          "mutationAttempted",
+                          "verified",
+                          "rollbackAttempted",
+                          "rollbackVerified",
+                          "stateAuthority",
+                          "requiresAcknowledgement",
+                          "singleTarget",
+                          "safeVolumeMaximumPercent",
+                          "playbackStarted",
+                          "captureStarted",
+                          "profileChanged",
+                          "routingChanged",
+                          "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral("synapse.settings.audio-control-receipt/v1") ||
+      object.value(QStringLiteral("target")).toString() != expectedTarget ||
+      object.value(QStringLiteral("targetType")).toString() != targetType ||
+      object.value(QStringLiteral("control")).toString() != expectedControl ||
+      !controlValueMatches(object.value(QStringLiteral("originalValue")),
+                           expectedControl, expectedOriginalValue, true) ||
+      !controlValueMatches(object.value(QStringLiteral("requestedValue")),
+                           expectedControl, expectedRequestedValue, false) ||
+      !object.value(QStringLiteral("changed")).isBool() ||
+      !object.value(QStringLiteral("mutationAttempted")).isBool() ||
+      !object.value(QStringLiteral("verified")).isBool() ||
+      !object.value(QStringLiteral("rollbackAttempted")).isBool() ||
+      !object.value(QStringLiteral("rollbackVerified")).isBool() ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("pipewire-pulse-model") ||
+      object.value(QStringLiteral("requiresAcknowledgement")).toString() !=
+          QString::fromLatin1(kControlAcknowledgement) ||
+      !object.value(QStringLiteral("singleTarget")).isBool() ||
+      !object.value(QStringLiteral("singleTarget")).toBool() ||
+      !exactInteger(object.value(QStringLiteral("safeVolumeMaximumPercent")),
+                    kSafeVolumeMaximumPercent, kSafeVolumeMaximumPercent) ||
+      !object.value(QStringLiteral("playbackStarted")).isBool() ||
+      object.value(QStringLiteral("playbackStarted")).toBool() ||
+      !object.value(QStringLiteral("captureStarted")).isBool() ||
+      object.value(QStringLiteral("captureStarted")).toBool() ||
+      !object.value(QStringLiteral("profileChanged")).isBool() ||
+      object.value(QStringLiteral("profileChanged")).toBool() ||
+      !object.value(QStringLiteral("routingChanged")).isBool() ||
+      object.value(QStringLiteral("routingChanged")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  const QString decodedStatus =
+      object.value(QStringLiteral("status")).toString();
+  QString decodedReason;
+  if (object.value(QStringLiteral("reason")).isNull()) {
+    decodedReason.clear();
+  } else if (!boundedText(object.value(QStringLiteral("reason")), 47,
+                          &decodedReason, false)) {
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  }
+  const bool valueChanged = object.value(QStringLiteral("changed")).toBool();
+  const bool mutationAttempted =
+      object.value(QStringLiteral("mutationAttempted")).toBool();
+  const bool valueVerified = object.value(QStringLiteral("verified")).toBool();
+  const bool attempted =
+      object.value(QStringLiteral("rollbackAttempted")).toBool();
+  const bool restored =
+      object.value(QStringLiteral("rollbackVerified")).toBool();
+  const bool validApplied = decodedStatus == QStringLiteral("Applied") &&
+                            decodedReason.isEmpty() && expectedChanged &&
+                            valueChanged && mutationAttempted &&
+                            valueVerified && !attempted && !restored;
+  const bool validAlready = decodedStatus == QStringLiteral("AlreadySet") &&
+                            decodedReason.isEmpty() && !expectedChanged &&
+                            !valueChanged && !mutationAttempted &&
+                            valueVerified && !attempted && !restored;
+  const bool validRefused = decodedStatus == QStringLiteral("Refused") &&
+                            controlRefusedReasonIds().contains(decodedReason) &&
+                            !valueChanged && !mutationAttempted &&
+                            !valueVerified && !attempted && !restored;
+  const bool rollbackReason =
+      decodedReason == QStringLiteral("mutation-timeout") ||
+      decodedReason == QStringLiteral("mutation-failed") ||
+      decodedReason == QStringLiteral("verification-failed") ||
+      decodedReason == QStringLiteral("rollback-failed");
+  const bool validFailed =
+      decodedStatus == QStringLiteral("Failed") && expectedChanged &&
+      controlFailedReasonIds().contains(decodedReason) && !valueChanged &&
+      mutationAttempted && !valueVerified && (!restored || attempted) &&
+      (!attempted || rollbackReason) &&
+      (decodedReason != QStringLiteral("rollback-failed") || attempted) &&
+      (!restored || decodedReason != QStringLiteral("rollback-failed")) &&
+      (!attempted || restored ||
+       decodedReason == QStringLiteral("rollback-failed"));
+  if (!validApplied && !validAlready && !validRefused && !validFailed)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  if (status)
+    *status = decodedStatus;
+  if (reason)
+    *reason = decodedReason;
+  if (changed)
+    *changed = valueChanged;
+  if (rollbackAttempted)
+    *rollbackAttempted = attempted;
+  if (rollbackVerified)
+    *rollbackVerified = restored;
+  return true;
+}
+
 bool decodeRouteReceipt(const QByteArray &payload,
                         const QString &expectedAction,
                         const QString &expectedDevice,
@@ -1251,6 +1526,159 @@ bool AudioAdapter::validStreamMove(const QString &streamId,
           : QStringLiteral("input");
   return validDirectionDevice(direction, originalDeviceId) &&
          validDirectionDevice(direction, requestedDeviceId);
+}
+
+QVariantMap AudioAdapter::audioControlTarget(const QString &targetId) const {
+  if (!snapshot_.available || !snapshot_.mutationAvailable ||
+      audioControlTargetType(targetId).isEmpty())
+    return {};
+  for (const QVariantList *items :
+       {&snapshot_.outputs, &snapshot_.inputs, &snapshot_.streams}) {
+    for (const QVariant &entry : *items) {
+      const QVariantMap item = entry.toMap();
+      if (item.value(QStringLiteral("id")).toString() == targetId &&
+          item.value(QStringLiteral("levelControlAvailable")).toBool())
+        return item;
+    }
+  }
+  return {};
+}
+
+bool AudioAdapter::startAudioControl(const QString &targetId,
+                                     const QString &control,
+                                     const QVariant &requestedValue) {
+  const QVariantMap target = audioControlTarget(targetId);
+  const bool volume = control == QStringLiteral("volume");
+  const bool mute = control == QStringLiteral("mute");
+  if (busy_ || target.isEmpty() || (!volume && !mute) ||
+      (volume && (requestedValue.metaType().id() != QMetaType::Int ||
+                  requestedValue.toInt() < 0 ||
+                  requestedValue.toInt() > kSafeVolumeMaximumPercent)) ||
+      (mute && requestedValue.metaType().id() != QMetaType::Bool)) {
+    setMessage(QString(), QStringLiteral("selection-invalid"));
+    return false;
+  }
+  const QVariant originalValue =
+      volume ? target.value(QStringLiteral("volumePercent"))
+             : target.value(QStringLiteral("muted"));
+  if ((volume && originalValue.metaType().id() != QMetaType::Int) ||
+      (mute && originalValue.metaType().id() != QMetaType::Bool)) {
+    setMessage(QString(), QStringLiteral("selection-invalid"));
+    return false;
+  }
+  const QString planAction =
+      volume ? QStringLiteral("plan-volume") : QStringLiteral("plan-mute");
+  const QString applyAction =
+      volume ? QStringLiteral("set-volume") : QStringLiteral("set-mute");
+  const QString requestedFlag =
+      volume ? QStringLiteral("--percent") : QStringLiteral("--muted");
+  const QString originalFlag = volume ? QStringLiteral("--from-percent")
+                                      : QStringLiteral("--from-muted");
+  const auto serializedValue = [volume](const QVariant &value) {
+    return volume           ? QString::number(value.toInt())
+           : value.toBool() ? QStringLiteral("true")
+                            : QStringLiteral("false");
+  };
+  const QString requestedText = serializedValue(requestedValue);
+  const QString originalText = serializedValue(originalValue);
+
+  clearProcessChoice();
+  setMessage(QString(), QString());
+  setBusy(true);
+  const bool started = startCommand(
+      {QStringLiteral("audio"), planAction, QStringLiteral("--target"),
+       targetId, requestedFlag, requestedText, QStringLiteral("--format"),
+       QStringLiteral("json")},
+      static_cast<int>(kMaximumReceiptBytes),
+      [this, targetId, control, originalValue, requestedValue, applyAction,
+       requestedFlag, requestedText, originalFlag,
+       originalText](int exitCode, const QByteArray &payload,
+                     const QString &commandError) {
+        if (!commandError.isEmpty() || exitCode != 0) {
+          failOperation(commandError.isEmpty()
+                            ? QStringLiteral("audio-control-plan-failed")
+                            : commandError);
+          return;
+        }
+        QString cohort;
+        QString errorId;
+        if (!AudioContracts::decodeControlPlan(payload, targetId, control,
+                                               originalValue, requestedValue,
+                                               &cohort, nullptr, &errorId)) {
+          failOperation(errorId);
+          return;
+        }
+        const bool applyStarted = startCommand(
+            {QStringLiteral("audio"), applyAction, QStringLiteral("--target"),
+             targetId, originalFlag, originalText, requestedFlag, requestedText,
+             QStringLiteral("--cohort"), cohort, QStringLiteral("--ack"),
+             QString::fromLatin1(kControlAcknowledgement),
+             QStringLiteral("--format"), QStringLiteral("json")},
+            static_cast<int>(kMaximumReceiptBytes),
+            [this, targetId, control, originalValue,
+             requestedValue](int applyExitCode, const QByteArray &applyPayload,
+                             const QString &applyError) {
+              if (!applyError.isEmpty()) {
+                startInventoryLoad(QString(), applyError);
+                return;
+              }
+              QString receiptStatus;
+              QString receiptReason;
+              bool receiptChanged = false;
+              bool rollbackAttempted = false;
+              bool rollbackVerified = false;
+              QString receiptError;
+              if (!AudioContracts::decodeControlReceipt(
+                      applyPayload, targetId, control, originalValue,
+                      requestedValue, &receiptStatus, &receiptReason,
+                      &receiptChanged, &rollbackAttempted, &rollbackVerified,
+                      &receiptError)) {
+                startInventoryLoad(QString(), receiptError);
+                return;
+              }
+              const bool success =
+                  receiptStatus == QStringLiteral("Applied") ||
+                  receiptStatus == QStringLiteral("AlreadySet");
+              if ((success && applyExitCode != 0) ||
+                  (!success && applyExitCode != 1)) {
+                startInventoryLoad(QString(),
+                                   QStringLiteral("contract-invalid"));
+                return;
+              }
+              if (success) {
+                const QString status =
+                    control == QStringLiteral("volume")
+                        ? receiptChanged
+                              ? QStringLiteral("audio-volume-applied")
+                              : QStringLiteral("audio-volume-unchanged")
+                    : receiptChanged ? QStringLiteral("audio-mute-applied")
+                                     : QStringLiteral("audio-mute-unchanged");
+                startInventoryLoad(status);
+                return;
+              }
+              QString operationError =
+                  receiptStatus == QStringLiteral("Refused")
+                      ? QStringLiteral("audio-control-refused")
+                      : QStringLiteral("audio-control-failed");
+              if (rollbackAttempted && rollbackVerified)
+                operationError = QStringLiteral("audio-control-restored");
+              startInventoryLoad(QString(), operationError);
+            });
+        if (!applyStarted)
+          failOperation(QStringLiteral("backend-unavailable"));
+      });
+  if (!started)
+    failOperation(QStringLiteral("backend-unavailable"));
+  return started;
+}
+
+bool AudioAdapter::setAudioVolume(const QString &targetId, int percent) {
+  return startAudioControl(targetId, QStringLiteral("volume"),
+                           QVariant(percent));
+}
+
+bool AudioAdapter::setAudioMuted(const QString &targetId, bool muted) {
+  return startAudioControl(targetId, QStringLiteral("mute"), QVariant(muted));
 }
 
 bool AudioAdapter::setAudioDefault(const QString &direction,

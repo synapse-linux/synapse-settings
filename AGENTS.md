@@ -34,6 +34,13 @@
   the exact captured original raw endpoint and only while the same stream
   identity remains provable. Never create or apply a policy rule as part of this
   transaction, and keep its cohort and acknowledgement outside QML.
+- Volume and mute are separate one-target plan/apply transactions for opaque
+  endpoint or stream IDs. Cap requested volume at 100%, revalidate the bound
+  identity twice, require exact acknowledgement and postflight, and compensate
+  only to the exact original value after freshly proving both identity and the
+  unchanged observed value. Keep cohorts, acknowledgements and raw setter
+  identities outside QML; never
+  imply playback, capture, profile, routing, default or policy authority.
 - Keep capture, Bluetooth pairing, safe playback tests, GoXLR control and profile
   mutation behind independent consent and capability gates.
 - Composition lock data and pacman state remain read-only inputs. Docker

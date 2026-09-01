@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.7.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.8.0-alpha.1"
 #endif
 
 typedef struct {
@@ -557,6 +557,10 @@ static void usage(FILE *out) {
           "  synapse-settings audio broker-status [--format text|json]\n"
           "  synapse-settings audio plan-default --direction output|input --device ID [--format text|json]\n"
           "  synapse-settings audio set-default --direction output|input --device ID --ack synapse-settings/audio-default/v1 [--format text|json]\n"
+          "  synapse-settings audio plan-volume --target ID --percent 0..100 [--format text|json]\n"
+          "  synapse-settings audio set-volume --target ID --from-percent 0..999 --percent 0..100 --cohort ID --ack synapse-settings/audio-control/v1 [--format text|json]\n"
+          "  synapse-settings audio plan-mute --target ID --muted true|false [--format text|json]\n"
+          "  synapse-settings audio set-mute --target ID --from-muted true|false --muted true|false --cohort ID --ack synapse-settings/audio-control/v1 [--format text|json]\n"
           "  synapse-settings audio policy show [--format text|json]\n"
           "  synapse-settings audio policy set-rule --match executable|directory --path PATH --direction output|input --device ID --ack synapse-settings/audio-route-policy/v1 [--format text|json]\n"
           "  synapse-settings audio policy set-process-rule --stream ID --device ID --ack synapse-settings/audio-route-policy/v1 [--format text|json]\n"
