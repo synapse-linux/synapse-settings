@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-route-resolution-v1.schema.json",
+  "title": "Synapse Settings audio route resolution v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "direction", "selectedDevice", "source", "rule", "available", "enforcementAvailable", "enforcementReason", "persistentPidRule"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-route-resolution/v1"},
+    "direction": {"enum": ["output", "input"]},
+    "selectedDevice": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+        {"type": "null"}
+      ]
+    },
+    "source": {"enum": ["exact-executable", "directory-prefix", "system-default"]},
+    "rule": {
+      "oneOf": [
+        {"type": "string", "pattern": "^rule-[0-9]{4}$"},
+        {"type": "null"}
+      ]
+    },
+    "available": {"type": "boolean"},
+    "enforcementAvailable": {"const": false},
+    "enforcementReason": {"const": "audio-route-broker-not-integrated"},
+    "persistentPidRule": {"const": false}
+  }
+}

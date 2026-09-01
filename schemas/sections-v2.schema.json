@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/sections-v2.schema.json",
+  "title": "Synapse Settings sections v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sections"],
+  "properties": {
+    "schema": {"const": "synapse.settings.sections/v2"},
+    "sections": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "icon", "available", "lazy"],
+        "properties": {
+          "id": {"enum": ["layers", "audio", "input", "themes"]},
+          "title": {"type": "string", "minLength": 1, "maxLength": 64},
+          "icon": {"type": "string", "minLength": 1, "maxLength": 64},
+          "available": {"const": true},
+          "lazy": {"const": true}
+        }
+      }
+    }
+  }
+}

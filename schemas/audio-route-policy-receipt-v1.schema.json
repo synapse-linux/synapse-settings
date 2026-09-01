@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-route-policy-receipt-v1.schema.json",
+  "title": "Synapse Settings audio route policy receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "action", "generation", "changed", "device", "rule", "policyApplied", "routingApplied", "enforcementAvailable", "enforcementReason"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-route-policy-receipt/v1"},
+    "status": {"const": "Applied"},
+    "action": {"enum": ["set-rule", "set-process-rule", "remove-rule"]},
+    "generation": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "changed": {"type": "boolean"},
+    "device": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+        {"type": "null"}
+      ]
+    },
+    "rule": {
+      "oneOf": [
+        {"type": "string", "pattern": "^rule-[0-9]{4}$"},
+        {"type": "null"}
+      ]
+    },
+    "policyApplied": {"const": true},
+    "routingApplied": {"const": false},
+    "enforcementAvailable": {"const": false},
+    "enforcementReason": {"const": "audio-route-broker-not-integrated"}
+  }
+}

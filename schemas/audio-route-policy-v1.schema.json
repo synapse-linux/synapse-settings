@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-route-policy-v1.schema.json",
+  "title": "Synapse Settings persisted audio route policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "generation", "rules"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-route-policy/v1"},
+    "generation": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "rules": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "match", "direction", "device", "enabled"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^rule-[0-9]{4}$"},
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": {"enum": ["executable", "directory"]},
+            "path": {"type": "string", "minLength": 1, "maxLength": 4095, "pattern": "^/"}
+          }
+        },
+        "direction": {"enum": ["output", "input"]},
+        "device": {
+          "type": "string",
+          "pattern": "^(output|input)-[0-9a-f]{16}$"
+        },
+        "enabled": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"direction": {"const": "output"}}},
+          "then": {"properties": {"device": {"pattern": "^output-[0-9a-f]{16}$"}}}
+        },
+        {
+          "if": {"properties": {"direction": {"const": "input"}}},
+          "then": {"properties": {"device": {"pattern": "^input-[0-9a-f]{16}$"}}}
+        }
+      ]
+    }
+  }
+}
