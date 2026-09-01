@@ -104,8 +104,12 @@ static const char *pactl_binary(void) {
 static void audio_usage(FILE *out) {
   fputs("Usage:\n"
         "  synapse-settings audio inventory [--format text|json]\n"
-        "  synapse-settings audio broker-status [--format text|json]\n"
-        "  synapse-settings audio plan-stream-move --stream ID --device ID "
+        "  synapse-settings audio broker-status [--format text|json]\n",
+        out);
+#ifdef SYNAPSE_SETTINGS_WITH_GOXLR_STATUS
+  fputs("  synapse-settings audio goxlr-status [--format text|json]\n", out);
+#endif
+  fputs("  synapse-settings audio plan-stream-move --stream ID --device ID "
         "[--format text|json]\n"
         "  synapse-settings audio move-stream --stream ID --from-device ID "
         "--device ID --cohort ID --ack " AUDIO_STREAM_MOVE_ACK " "
@@ -1874,6 +1878,10 @@ int settings_audio_command(int argc, char **argv) {
     return settings_audio_route_command(argc, argv);
   if (strcmp(argv[1], "broker-status") == 0)
     return settings_audio_broker_status_command(argc, argv);
+#ifdef SYNAPSE_SETTINGS_WITH_GOXLR_STATUS
+  if (strcmp(argv[1], "goxlr-status") == 0)
+    return settings_audio_goxlr_status_command(argc, argv);
+#endif
   if (strcmp(argv[1], "plan-stream-move") == 0 ||
       strcmp(argv[1], "move-stream") == 0)
     return settings_audio_stream_move_command(argc, argv);

@@ -36,6 +36,13 @@ case "${1-} ${2-} ${3-}" in
 esac
 SH
 chmod 755 "$work/pactl-fake"
+cat >"$work/goxlr-fake" <<'SH'
+#!/bin/sh
+set -eu
+[ "${1-} ${2-} ${3-}" = 'provider-status --format json' ] || exit 64
+printf '%s\n' '{"schema":"synapse.goxlr.provider-status/v2","deviceCount":1,"truncated":false,"devices":[{"id":"goxlr-1","model":"GoXLR Mini","systemOutputSupported":true,"stateAuthority":"provider-profile-model","systemOutput":{"routeToLineOut":true,"systemVolume":254,"lineOutVolume":255,"systemFader":"D","systemMuteState":"Unmuted","lineOutMix":"A","submixEnabled":false}}]}'
+SH
+chmod 755 "$work/goxlr-fake"
 
 for locale in en_US it_IT; do
   if ! env LC_ALL="${locale}.utf8" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
@@ -43,6 +50,7 @@ for locale in en_US it_IT; do
       XDG_RUNTIME_DIR="$work/runtime" SYNAPSE_SETTINGS_TEST_BACKEND="$backend" \
       SYNAPSE_PACTL="$work/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$work/audio" \
       SYNAPSE_AUDIO_ROUTE_POLICY="$work/config/audio-route-policy-v1.json" \
+      SYNAPSE_GOXLR="$work/goxlr-fake" \
       "$qmltestrunner" -import "$module_root" \
         -input tests/qml/tst_audio_module.qml \
         -o "$work/${locale}.log,txt" >"$work/${locale}.stdout" \

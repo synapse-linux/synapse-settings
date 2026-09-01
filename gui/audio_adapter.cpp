@@ -14,6 +14,7 @@
 #include <QSet>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -22,6 +23,7 @@ namespace {
 constexpr qsizetype kMaximumInventoryBytes = qsizetype{1024} * 1024;
 constexpr qsizetype kMaximumPolicyBytes = qsizetype{128} * 1024;
 constexpr qsizetype kMaximumBrokerStatusBytes = 4096;
+constexpr qsizetype kMaximumGoxlrStatusBytes = qsizetype{16} * 1024;
 constexpr qsizetype kMaximumReceiptBytes = qsizetype{64} * 1024;
 constexpr qsizetype kMaximumErrorBytes = qsizetype{16} * 1024;
 constexpr int kMaximumLabelBytes = 255;
@@ -30,6 +32,7 @@ constexpr int kMaximumEndpoints = 64;
 constexpr int kMaximumStreams = 128;
 constexpr int kMaximumCards = 32;
 constexpr int kMaximumRules = 128;
+constexpr int kMaximumGoxlrDevices = 8;
 
 constexpr char kDefaultAcknowledgement[] = "synapse-settings/audio-default/v1";
 constexpr char kRouteAcknowledgement[] =
@@ -166,6 +169,11 @@ const QRegularExpression &controlCohortExpression() {
   return value;
 }
 
+const QRegularExpression &goxlrDeviceExpression() {
+  static const QRegularExpression value(QStringLiteral("^goxlr-[1-8]$"));
+  return value;
+}
+
 QString audioControlTargetType(const QString &target) {
   if (tokenMatches(target, outputTokenExpression()))
     return QStringLiteral("output");
@@ -260,6 +268,16 @@ const QSet<QString> &brokerReasonIds() {
       QStringLiteral("runtime-unavailable"),
       QStringLiteral("runtime-state-invalid"),
       QStringLiteral("broker-already-running"),
+  };
+  return values;
+}
+
+const QSet<QString> &goxlrFailedReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("timeout"),
+      QStringLiteral("response-too-large"),
+      QStringLiteral("invalid-response"),
+      QStringLiteral("status-unavailable"),
   };
   return values;
 }
@@ -716,6 +734,127 @@ bool decodeBrokerStatus(const QByteArray &payload,
   snapshot->routeBrokerActive = active;
   snapshot->routeBrokerReason = reason;
   snapshot->routeEnforcementAvailable = enforcement;
+  return true;
+}
+
+bool decodeGoxlrStatus(const QByteArray &payload,
+                       AudioPresentationSnapshot *snapshot, QString *errorId) {
+  if (!snapshot)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumGoxlrStatusBytes, &object, errorId))
+    return false;
+  if (!exactKeys(object,
+                 {"schema", "status", "reason", "providerActive", "deviceCount",
+                  "truncated", "devices", "stateAuthority", "hardwareReadback",
+                  "hardwareExactRollback", "mutationAvailable", "readOnly",
+                  "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral("synapse.settings.audio-goxlr-status/v1") ||
+      !object.value(QStringLiteral("providerActive")).isBool() ||
+      !object.value(QStringLiteral("truncated")).isBool() ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("provider-profile-model") ||
+      !object.value(QStringLiteral("hardwareReadback")).isBool() ||
+      object.value(QStringLiteral("hardwareReadback")).toBool() ||
+      !object.value(QStringLiteral("hardwareExactRollback")).isBool() ||
+      object.value(QStringLiteral("hardwareExactRollback")).toBool() ||
+      !object.value(QStringLiteral("mutationAvailable")).isBool() ||
+      object.value(QStringLiteral("mutationAvailable")).toBool() ||
+      !object.value(QStringLiteral("readOnly")).isBool() ||
+      !object.value(QStringLiteral("readOnly")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  QString status;
+  if (!boundedText(object.value(QStringLiteral("status")), 15, &status,
+                   false) ||
+      (status != QStringLiteral("Ready") &&
+       status != QStringLiteral("Inactive") &&
+       status != QStringLiteral("Unavailable") &&
+       status != QStringLiteral("Failed")))
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  QString reason;
+  if (object.value(QStringLiteral("reason")).isNull()) {
+    reason.clear();
+  } else if (!boundedText(object.value(QStringLiteral("reason")), 47, &reason,
+                          false)) {
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  }
+
+  qint64 declaredCount = 0;
+  if (!exactInteger(object.value(QStringLiteral("deviceCount")), 0,
+                    kMaximumGoxlrDevices, &declaredCount) ||
+      !object.value(QStringLiteral("devices")).isArray())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  const QJsonArray devices = object.value(QStringLiteral("devices")).toArray();
+  if (devices.size() != declaredCount || devices.size() > kMaximumGoxlrDevices)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  QVariantList decoded;
+  QSet<QString> identities;
+  decoded.reserve(devices.size());
+  for (const QJsonValue &entry : devices) {
+    if (!entry.isObject())
+      return fail(errorId, QStringLiteral("contract-invalid"));
+    const QJsonObject device = entry.toObject();
+    if (!exactKeys(device, {"id", "model", "systemOutputSupported",
+                            "controlAvailable"}))
+      return fail(errorId, QStringLiteral("contract-invalid"));
+    QString id;
+    QString model;
+    if (!boundedText(device.value(QStringLiteral("id")), 15, &id, false) ||
+        !tokenMatches(id, goxlrDeviceExpression()) || identities.contains(id) ||
+        !boundedText(device.value(QStringLiteral("model")), 15, &model,
+                     false) ||
+        (model != QStringLiteral("GoXLR Mini") &&
+         model != QStringLiteral("GoXLR") &&
+         model != QStringLiteral("Unknown")) ||
+        !device.value(QStringLiteral("systemOutputSupported")).isBool() ||
+        !device.value(QStringLiteral("controlAvailable")).isBool() ||
+        device.value(QStringLiteral("controlAvailable")).toBool())
+      return fail(errorId, QStringLiteral("contract-invalid"));
+    identities.insert(id);
+    QVariantMap item;
+    item.insert(QStringLiteral("id"), id);
+    item.insert(QStringLiteral("model"), model);
+    item.insert(QStringLiteral("systemOutputSupported"),
+                device.value(QStringLiteral("systemOutputSupported")).toBool());
+    decoded.append(item);
+  }
+  std::sort(decoded.begin(), decoded.end(),
+            [](const QVariant &left, const QVariant &right) {
+              return left.toMap().value(QStringLiteral("id")).toString() <
+                     right.toMap().value(QStringLiteral("id")).toString();
+            });
+  for (QVariant &entry : decoded) {
+    QVariantMap projected = entry.toMap();
+    projected.remove(QStringLiteral("id"));
+    entry = projected;
+  }
+
+  const bool active = object.value(QStringLiteral("providerActive")).toBool();
+  const bool truncated = object.value(QStringLiteral("truncated")).toBool();
+  const bool ready = status == QStringLiteral("Ready");
+  const bool validReady = ready && active && reason.isEmpty() &&
+                          (!truncated || declaredCount == kMaximumGoxlrDevices);
+  const bool validUnavailable = status == QStringLiteral("Unavailable") &&
+                                !active &&
+                                reason == QStringLiteral("adapter-unavailable");
+  const bool validInactive = status == QStringLiteral("Inactive") && !active &&
+                             reason == QStringLiteral("provider-inactive");
+  const bool validFailed = status == QStringLiteral("Failed") && !active &&
+                           goxlrFailedReasonIds().contains(reason);
+  if ((!validReady && !validUnavailable && !validInactive && !validFailed) ||
+      (!ready && (declaredCount != 0 || !devices.isEmpty() || truncated)))
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  snapshot->goxlrStatus = status;
+  snapshot->goxlrReason = reason;
+  snapshot->goxlrProviderActive = active;
+  snapshot->goxlrTruncated = truncated;
+  snapshot->goxlrDevices = std::move(decoded);
   return true;
 }
 
@@ -1321,6 +1460,17 @@ QString AudioAdapter::audioRouteBrokerReason() const {
 bool AudioAdapter::audioRouteEnforcementAvailable() const {
   return snapshot_.routeEnforcementAvailable;
 }
+QString AudioAdapter::audioGoxlrStatus() const { return snapshot_.goxlrStatus; }
+QString AudioAdapter::audioGoxlrReason() const { return snapshot_.goxlrReason; }
+bool AudioAdapter::audioGoxlrProviderActive() const {
+  return snapshot_.goxlrProviderActive;
+}
+bool AudioAdapter::audioGoxlrTruncated() const {
+  return snapshot_.goxlrTruncated;
+}
+QVariantList AudioAdapter::audioGoxlrDevices() const {
+  return snapshot_.goxlrDevices;
+}
 QVariantList AudioAdapter::audioProcessChoices() const {
   return processChoices_;
 }
@@ -1445,6 +1595,34 @@ void AudioAdapter::startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
         }
         QString errorId;
         if (!AudioContracts::decodeBrokerStatus(payload, &snapshot, &errorId)) {
+          failLoad(errorId);
+          return;
+        }
+        startGoxlrStatusLoad(std::move(snapshot), successStatusId,
+                             operationErrorId);
+      });
+  if (!started)
+    failLoad(QStringLiteral("backend-unavailable"));
+}
+
+void AudioAdapter::startGoxlrStatusLoad(AudioPresentationSnapshot snapshot,
+                                        const QString &successStatusId,
+                                        const QString &operationErrorId) {
+  const bool started = startCommand(
+      {QStringLiteral("audio"), QStringLiteral("goxlr-status"),
+       QStringLiteral("--format"), QStringLiteral("json")},
+      static_cast<int>(kMaximumGoxlrStatusBytes),
+      [this, snapshot = std::move(snapshot), successStatusId,
+       operationErrorId](int exitCode, const QByteArray &payload,
+                         const QString &commandError) mutable {
+        if (!commandError.isEmpty() || exitCode != 0) {
+          failLoad(commandError.isEmpty()
+                       ? QStringLiteral("goxlr-status-unavailable")
+                       : commandError);
+          return;
+        }
+        QString errorId;
+        if (!AudioContracts::decodeGoxlrStatus(payload, &snapshot, &errorId)) {
           failLoad(errorId);
           return;
         }

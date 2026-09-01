@@ -3,8 +3,8 @@
 ## Layers
 
 1. `synapse-settings` C11 core owns inventory, validation, canonicalization,
-   policy persistence, precedence and guarded default-device and level-control
-   operations.
+   policy persistence, precedence, guarded default-device and level-control
+   operations, and the read-only GoXLR status bridge.
 2. `AudioAdapter` is a thin Qt/C++ boundary. It owns bounded asynchronous core
    execution, strict contract decoding, native path choosers and publication of
    bounded presentation projections.
@@ -13,8 +13,9 @@
    PipeWire-Pulse observation and new-stream enforcement. Its user service is
    staged but never enabled automatically.
 
-No lower layer delegates authority upward. QML never sees raw JSON, PipeWire node
-names, PIDs, command lines, environments, acknowledgements or backend argv. A
+No lower layer delegates authority upward. QML never sees raw JSON, PipeWire or
+provider identities, provider profile values, PIDs, command lines, environments,
+acknowledgements or backend argv. A
 process candidate consists only of an opaque Audio stream ID and a sanitized
 label. Executable and directory paths remain inside the native chooser and
 adapter-to-core invocation.
@@ -40,14 +41,16 @@ rejected linker `-z x86-64-baseline` path. The production ELF boundary test
 checks all four installed artifacts.
 
 `AudioShellHost` exposes readiness, availability, busy state, broker activity,
-enforcement availability and bounded status/reason/error identifiers. It does
-not expose models containing private process data, the backend executable path,
+enforcement availability, read-only GoXLR status/activity/count/truncation and
+bounded status/reason/error identifiers. It does not expose models containing
+private process or provider data, the backend executable path,
 raw JSON, PipeWire names, acknowledgements, cohorts, argv, environment or IPC
 frames. The existing feature QML receives the same typed adapter as the
 standalone application and remains free of Quickshell imports.
 
 The host sets an explicit `active` boolean. Activation lazily creates the Audio
-section and starts the read-only inventory-policy-broker-status load. Hiding the
+section and starts the read-only inventory-policy-broker-status-GoXLR-status
+load. Hiding the
 section releases its presentation objects without adding ambient mutation or
 reconciliation; the typed singleton remains single-flight. A host that offers
 native executable/directory dialogs must run as `QApplication`. If it does not,
@@ -68,8 +71,8 @@ a bounded response and a bounded timeout. It never invokes a shell.
 
 Every JSON object is decoded into an exact expected field set. Arrays, text,
 identities and integer ranges are bounded; duplicate endpoint, stream, card and
-rule identities fail closed. Models publish only after inventory, route policy
-and the separate broker runtime status all pass validation.
+rule identities fail closed. Models publish only after inventory, route policy, separate broker runtime
+status and read-only GoXLR status all pass validation.
 
 A GUI default-device transaction is:
 
@@ -79,7 +82,8 @@ A GUI default-device transaction is:
 3. if changed, invoke the fixed setter with the adapter-owned exact
    acknowledgement;
 4. validate the verified receipt;
-5. reload inventory and policy before publishing success.
+5. reload inventory, policy, broker status and GoXLR status before publishing
+   success.
 
 Application policy mutations validate the exact receipt and then perform the
 same complete refresh. A failed mutation preserves the last accepted model and
@@ -95,7 +99,8 @@ routing:
    every accepted plan; unchanged state returns `AlreadySet` without a setter;
 4. independently validate `Applied`, `AlreadySet`, `Refused` or `Failed` plus
    postflight and compensation invariants;
-5. reload inventory, policy and broker status after every apply outcome.
+5. reload inventory, policy, broker status and GoXLR status after every apply
+   outcome.
 
 Requested volume is limited to 0–100%. Mute is an exact boolean. QML opens a
 visible confirmation and passes only the opaque target and requested typed
@@ -111,8 +116,9 @@ A GUI existing-stream transaction is independent:
    cohort and adapter-owned acknowledgement;
 4. independently validate the exact `Applied`, `AlreadyRouted`, `Refused` or
    `Failed` receipt and its postflight/rollback invariants;
-5. reload inventory, policy and broker status before reporting success, a typed
-   transaction error, or an uncertain apply transport/contract result.
+5. reload inventory, policy, broker status and GoXLR status before reporting
+   success, a typed transaction error, or an uncertain apply transport/contract
+   result.
 
 QML owns only the visible modal confirmation. It never receives the cohort,
 acknowledgement, process identity, backend index or raw endpoint.
@@ -148,6 +154,33 @@ separate authorities.
 
 This capability was qualified only with compile-time fixture overrides. It did
 not change a live device or stream and did not start playback or capture.
+
+## Read-only GoXLR status bridge
+
+The Settings-only C11 bridge checks the fixed production
+`/usr/bin/synapse-goxlr` executable and invokes exactly
+`provider-status --format json` with no shell. Its isolated child process group,
+null input/error streams, monotonic deadline and output capture limit execution
+to three seconds and 65536 bytes. A close-on-exec child-report channel
+unambiguously separates setup or `exec` failure from every clean provider
+nonzero exit, including 126 and 127. The test path override is compiled only
+into the fixture Settings binary; the production Audio broker neither links the
+bridge nor contains its path or hook.
+
+The parser accepts one canonical provider-status v2 object, exact nested field
+sets, at most eight unique redacted device IDs, fixed source authority, bounded
+models and complete profile-value types. It rejects duplicate keys and
+identities before emitting anything. Route, volume, fader, mute, mix and submix
+values are validated and immediately discarded. The Settings v1 projection
+retains only status, model and reported system-output capability and fixes every
+control, hardware-readback and hardware-exact-rollback claim false.
+
+The Qt adapter repeats exact contract and cross-field validation. Before
+publication it sorts devices deterministically and strips their redacted IDs, so
+QML receives only model and reported capability. QML exposes no provider
+command, profile field, acknowledgement, plan or apply method. Loading cannot
+start the provider or change hardware, and Ready is never interpreted as
+hardware readback or physical qualification.
 
 ## PipeWire-Pulse core adapter
 

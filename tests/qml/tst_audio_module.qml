@@ -22,6 +22,11 @@ TestCase {
         property bool audioRouteBrokerActive: false
         property string audioRouteBrokerReason: "broker-not-running"
         property bool audioRouteEnforcementAvailable: false
+        property string audioGoxlrStatus: "Ready"
+        property string audioGoxlrReason: ""
+        property bool audioGoxlrProviderActive: true
+        property bool audioGoxlrTruncated: false
+        property var audioGoxlrDevices: [{ model: "GoXLR Mini", systemOutputSupported: true }]
         property var audioProcessChoices: []
         property bool audioProcessChoiceOpen: false
         property string audioStatusId: ""
@@ -61,6 +66,8 @@ TestCase {
         compare(typeof AudioBackend.chooseAudioProcessRule, "function")
         compare(typeof AudioBackend.chooseAudioExecutableRule, "function")
         compare(typeof AudioBackend.chooseAudioDirectoryRule, "function")
+        compare(typeof AudioBackend.audioGoxlrStatus, "string")
+        compare(typeof AudioBackend.audioGoxlrDevices, "object")
         compare(shellHost.loaded, false)
         compare(shellHost.contentLoaded, false)
     }
@@ -70,6 +77,7 @@ TestCase {
         verify(section)
         const italian = Qt.locale().name.substring(0, 2).toLowerCase() === "it"
         compare(section.brokerStateText(), italian ? "Inattivo" : "Inactive")
+        compare(section.goxlrStateText(), italian ? "Pronto" : "Ready")
     }
 
     function test_3_typedReadOnlyLoad() {
@@ -85,6 +93,11 @@ TestCase {
         compare(shellHost.busy, false)
         compare(shellHost.routeBrokerActive, false)
         compare(shellHost.routeEnforcementAvailable, false)
+        compare(shellHost.goxlrStatus, "Ready")
+        compare(shellHost.goxlrProviderActive, true)
+        compare(shellHost.goxlrDeviceCount, 1)
+        compare(AudioBackend.audioGoxlrDevices[0].model, "GoXLR Mini")
+        compare(typeof AudioBackend.audioGoxlrDevices[0].id, "undefined")
         compare(shellHost.reasonId, "")
         compare(shellHost.errorId, "")
         compare(AudioBackend.audioOutputs.length, 1)

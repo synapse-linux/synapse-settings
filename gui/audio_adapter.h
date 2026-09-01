@@ -23,6 +23,11 @@ struct AudioPresentationSnapshot {
   bool routeBrokerActive = false;
   QString routeBrokerReason;
   bool routeEnforcementAvailable = false;
+  QString goxlrStatus;
+  QString goxlrReason;
+  bool goxlrProviderActive = false;
+  bool goxlrTruncated = false;
+  QVariantList goxlrDevices;
 };
 
 namespace AudioContracts {
@@ -33,6 +38,8 @@ bool decodePolicy(const QByteArray &payload,
                   AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodeBrokerStatus(const QByteArray &payload,
                         AudioPresentationSnapshot *snapshot, QString *errorId);
+bool decodeGoxlrStatus(const QByteArray &payload,
+                       AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodeStreamMovePlan(const QByteArray &payload,
                           const QString &expectedStream,
                           const QString &expectedOriginalDevice,
@@ -98,6 +105,16 @@ class AudioAdapter final : public QObject {
                  audioModelsChanged)
   Q_PROPERTY(bool audioRouteEnforcementAvailable READ
                  audioRouteEnforcementAvailable NOTIFY audioModelsChanged)
+  Q_PROPERTY(
+      QString audioGoxlrStatus READ audioGoxlrStatus NOTIFY audioModelsChanged)
+  Q_PROPERTY(
+      QString audioGoxlrReason READ audioGoxlrReason NOTIFY audioModelsChanged)
+  Q_PROPERTY(bool audioGoxlrProviderActive READ audioGoxlrProviderActive NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(bool audioGoxlrTruncated READ audioGoxlrTruncated NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(QVariantList audioGoxlrDevices READ audioGoxlrDevices NOTIFY
+                 audioModelsChanged)
   Q_PROPERTY(QVariantList audioProcessChoices READ audioProcessChoices NOTIFY
                  audioProcessChoiceChanged)
   Q_PROPERTY(bool audioProcessChoiceOpen READ audioProcessChoiceOpen NOTIFY
@@ -129,6 +146,11 @@ public:
   bool audioRouteBrokerActive() const;
   QString audioRouteBrokerReason() const;
   bool audioRouteEnforcementAvailable() const;
+  QString audioGoxlrStatus() const;
+  QString audioGoxlrReason() const;
+  bool audioGoxlrProviderActive() const;
+  bool audioGoxlrTruncated() const;
+  QVariantList audioGoxlrDevices() const;
   QVariantList audioProcessChoices() const;
   bool audioProcessChoiceOpen() const;
   QString audioStatusId() const;
@@ -176,6 +198,9 @@ private:
   void startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
                              const QString &successStatusId,
                              const QString &operationErrorId);
+  void startGoxlrStatusLoad(AudioPresentationSnapshot snapshot,
+                            const QString &successStatusId,
+                            const QString &operationErrorId);
   void publishSnapshot(AudioPresentationSnapshot snapshot,
                        const QString &successStatusId,
                        const QString &operationErrorId);

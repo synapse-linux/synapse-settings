@@ -131,6 +131,43 @@ status after every apply result. QML presents explicit volume and mute dialogs
 for one published item and receives only the target token and bounded typed
 values. This source increment performed no live mutation, playback or capture.
 
+## Alpha 9 read-only GoXLR provider status
+
+GoXLR presence is an observation capability, not hardware control.
+`synapse-settings audio goxlr-status` checks the fixed production executable
+`/usr/bin/synapse-goxlr` and, when present, invokes only
+`provider-status --format json`. It does not start the provider, initialize a
+device, apply a profile, route audio, play media or capture input. The outer
+process is bounded to three seconds and 65536 response bytes.
+
+C11 strictly decodes the complete `synapse.goxlr.provider-status/v2` object,
+including every nested system-output field, solely to prove the provider
+contract. Duplicate, missing, extra, malformed or out-of-range values, duplicate
+device IDs, unsupported models, count disagreement, oversized output and timeout
+all fail closed. Profile values are then discarded. The Settings-owned
+`synapse.settings.audio-goxlr-status/v1` projection carries only typed status,
+redacted device model and whether the provider reports system-output capability.
+It fixes `stateAuthority=provider-profile-model`, `hardwareReadback=false`,
+`hardwareExactRollback=false`, `mutationAvailable=false` and `readOnly=true`.
+
+`Unavailable` means the adapter executable is absent; `Inactive` means the
+read-only command completed with a clean nonzero provider result; launch/setup
+failure, signal termination and unavailable status transport are typed
+`Failed/status-unavailable`. Other bounded inspection or contract failures are
+also `Failed`; `Ready` means only that the provider status contract was accepted.
+Ready does not mean hardware state was read back,
+a device is audible, a route was applied or rollback is exact. A Ready provider
+may validly report zero devices.
+
+The Qt adapter independently validates the exact Settings contract and adds this
+stage after inventory, policy and broker status. It publishes a QML projection
+containing status, a bounded reason, activity, truncation and device model plus
+reported capability. It removes even the provider's redacted device token and
+exposes no GoXLR plan/apply/control method. QML maps the typed state to localized
+text and explicitly states that it cannot start the provider or mutate hardware.
+All provider responses in this increment came from compile-time fixture paths;
+no live provider or hardware was queried.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -179,8 +216,9 @@ its production constructor uses only `/usr/bin/synapse-settings`. The module's
 typed reason/status/error properties while rendering the same
 `AudioSettings.qml` presentation.
 
-The shell controls one explicit `active` property. Activating the module starts
-only the established read-only inventory, policy view and broker-status cohort.
+The shell controls one explicit `active` property. In Alpha 9, activating the
+module starts only the established read-only inventory, policy view,
+broker-status and GoXLR-status cohort.
 Mutations remain behind the same visible confirmations and adapter-owned plan,
 acknowledgement, receipt validation and complete refresh. Neither loading the
 module nor selecting the Audio section changes a default, policy, stream,
@@ -201,8 +239,9 @@ remain separate gates.
 ## Remaining Audio work
 
 Balance, profiles and ports, level metering, safe playback tests, Bluetooth
-state, hotplug and GoXLR presence remain separate capabilities. Alpha 8 volume
-and mute authority never implies any of them. A safe sample never authorizes
-capture, profile import or GoXLR firmware/mixer mutation.
+state, hotplug and GoXLR hardware control remain separate capabilities. Alpha 9
+presence/status observation and Alpha 8 volume/mute authority never imply any of
+them. A safe sample never authorizes capture, profile import or GoXLR
+firmware/mixer mutation.
 The existing Quickshell `AudioPanel.qml` direct mutation model must not be reused
 inside Settings.

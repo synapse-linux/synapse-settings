@@ -16,6 +16,16 @@ grep -Fq 'isSingleton: true' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'exports: ["AudioBackend 1.0"]' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "setAudioVolume"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "setAudioMuted"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "audioGoxlrStatus"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "audioGoxlrDevices"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'readonly property string goxlrStatus:' "$module/AudioShellHost.qml"
+if grep -Eiq 'name: "(set|plan|apply)Goxlr|stateAuthority|hardwareReadback|systemVolume|lineOutVolume|systemFader|systemMuteState|lineOutMix|submixEnabled' \
+    "$module/synapse-settings-audio.qmltypes" "$module"/*.qml ||
+   grep -Eiq 'goxlr-[1-8]|(^|[^[:alnum:]_])controlAvailable([^[:alnum:]_]|$)' \
+    "$module/synapse-settings-audio.qmltypes" "$module"/*.qml; then
+  printf 'forbidden GoXLR authority or raw provider state in feature QML\n' >&2
+  exit 1
+fi
 
 while IFS= read -r import_line; do
   case "$import_line" in

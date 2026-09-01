@@ -1,18 +1,20 @@
 # Synapse Settings
 
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 8 adds separately planned, acknowledged and
-verified volume/mute control for one opaque device or active-stream target. The
-`Synapse.Settings.Audio` module keeps PipeWire authority, raw identities,
-private cohorts, acknowledgements and rollback in C11/Qt boundaries rather than
-QML. Existing-stream movement remains an independent Alpha 6 capability.
-Installation, shell replacement, broker activation, live mutation and physical
+new-stream Audio route broker. Alpha 9 adds bounded, read-only GoXLR provider
+presence and capability status after the existing inventory, policy and broker
+cohort. The `Synapse.Settings.Audio` module keeps PipeWire and provider
+authority, raw identities, private cohorts, acknowledgements and rollback in
+C11/Qt boundaries rather than QML. It exposes no GoXLR mutation operation and
+never represents the provider profile model as hardware readback. Installation,
+shell replacement, provider or broker activation, live mutation and physical
 qualification remain later deployment gates.
 
 ```bash
 make CORE_ROOT=/path/to/staged-core clean all test-all
 build/synapse-settings audio inventory --format json
 build/synapse-settings audio broker-status --format json
+build/synapse-settings audio goxlr-status --format json
 build/synapse-settings audio plan-stream-move --stream PLAYBACK_ID --device OUTPUT_ID --format json
 build/synapse-settings audio plan-volume --target OUTPUT_ID --percent 40 --format json
 build/synapse-settings audio plan-mute --target PLAYBACK_ID --muted true --format json
@@ -53,6 +55,11 @@ Audio capabilities in this slice:
   PipeWire endpoint;
 - owner-private, same-UID, bounded AF_UNIX status IPC with no mutation requests;
 - typed Active, Inactive and Unavailable broker presentation in Settings;
+- fixed-path, bounded GoXLR status inspection with typed Ready, Inactive,
+  Unavailable and Failed outcomes;
+- a redacted device projection limited to model and reported system-output
+  capability, with no provider startup, hardware controls, raw profile values or
+  hardware-readback claim;
 - a separate, one-stream existing-stream plan and exact-acknowledgement move with
   same-identity postflight and exact-original rollback when safe;
 - an explicit Qt confirmation surface that never creates a durable rule;
@@ -79,8 +86,9 @@ preflight, and returns a dedicated receipt. No persistent rule is created.
 
 `make install` stages a hardened systemd user unit but does not enable or start
 it. The current source candidate and QML module were not installed, enabled or
-run against live Audio. Existing-stream movement and level-control transactions
-were exercised only through the compile-time test `pactl` override; no live
+run against live Audio or a live GoXLR provider. Existing-stream movement and
+level-control transactions were exercised only through the compile-time test
+`pactl` override; no live
 stream, volume or mute state was changed. Fixtures cover device and stream
 controls, playback and recording moves, typed preflight refusal, stale cohorts,
 wrong originals, endpoint drift, timeout, false backend success, target or
@@ -88,11 +96,16 @@ identity loss, unavailable verification, amplified pre-state restoration,
 external restoration, intervening values, verified rollback and failed rollback.
 Policy receipts still describe policy
 persistence only and therefore continue to report `routingApplied=false`.
-Settings obtains runtime state through
+Settings obtains broker runtime state through
 `audio broker-status`, which sends one fixed read-only request to the broker's
 mode-0600 AF_UNIX socket in an owner-mode-0700 runtime directory. The C11 client
 rejects stale sockets, wrong ownership or modes, timeouts and noncanonical
-responses before the Qt adapter receives a typed contract.
+responses before the Qt adapter receives a typed contract. The independent
+`audio goxlr-status` bridge executes only `/usr/bin/synapse-goxlr` with fixed
+`provider-status --format json` arguments, bounds time and output, strictly
+decodes the provider v2 contract, strips all profile values, and emits a
+Settings-owned status contract. A missing adapter or inactive provider is
+ordinary typed state.
 
 Docker inventory from Alpha 1 remains optional and bounded. CLI and broker
 runtime dependencies are `libsynapse-core.so.0` and `json-c`; the optional GUI

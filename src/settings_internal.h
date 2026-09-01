@@ -15,6 +15,9 @@
 #define SETTINGS_AUDIO_BROKER_STREAM_LIMIT 128U
 
 int settings_audio_command(int argc, char **argv);
+#ifdef SYNAPSE_SETTINGS_WITH_GOXLR_STATUS
+int settings_audio_goxlr_status_command(int argc, char **argv);
+#endif
 int settings_audio_route_command(int argc, char **argv);
 int settings_audio_policy_target(const char *direction, const char *requested,
                                  char *target, size_t target_size,

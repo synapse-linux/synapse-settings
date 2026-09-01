@@ -24,6 +24,11 @@ Module {
         Property { name: "audioRouteBrokerActive"; type: "bool"; isReadonly: true }
         Property { name: "audioRouteBrokerReason"; type: "string"; isReadonly: true }
         Property { name: "audioRouteEnforcementAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrStatus"; type: "string"; isReadonly: true }
+        Property { name: "audioGoxlrReason"; type: "string"; isReadonly: true }
+        Property { name: "audioGoxlrProviderActive"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrTruncated"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrDevices"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioProcessChoices"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioProcessChoiceOpen"; type: "bool"; isReadonly: true }
         Property { name: "audioStatusId"; type: "string"; isReadonly: true }

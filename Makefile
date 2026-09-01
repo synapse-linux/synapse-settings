@@ -7,7 +7,7 @@ DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 QMLDIR ?= $(LIBDIR)/qt6/qml
 BUILD_DIR ?= build
-VERSION := 0.8.0-alpha.1
+VERSION := 0.9.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -68,11 +68,14 @@ GUI_ENABLED := $(GUI_DEPS_AVAILABLE)
 endif
 
 AUDIO_SOURCES := src/audio.c src/audio_policy.c src/audio_broker_status.c
+SETTINGS_AUDIO_SOURCES := src/audio_goxlr_status.c
+SETTINGS_AUDIO_CPPFLAGS := -DSYNAPSE_SETTINGS_WITH_GOXLR_STATUS=1
 AUDIO_INTERNALS := src/audio_control.inc
 ISA_NOTE_SOURCE := src/x86_64_baseline_note.c
 ISA_NOTE_SCRIPT := src/x86_64_baseline_note.ld
 ISA_NOTE_LDFLAGS := -Wl,-T,$(abspath $(ISA_NOTE_SCRIPT))
-SOURCES := src/synapse_settings.c $(AUDIO_SOURCES) $(ISA_NOTE_SOURCE)
+SOURCES := src/synapse_settings.c $(AUDIO_SOURCES) \
+	$(SETTINGS_AUDIO_SOURCES) $(ISA_NOTE_SOURCE)
 BROKER_SOURCES := src/audio_broker.c $(AUDIO_SOURCES) $(ISA_NOTE_SOURCE)
 BINARY := $(BUILD_DIR)/synapse-settings
 TEST_BINARY := $(BUILD_DIR)/synapse-settings-test
@@ -150,18 +153,19 @@ $(GUI_ISA_NOTE_OBJECT): $(ISA_NOTE_SOURCE) | $(BUILD_DIR)
 
 $(BINARY): $(SOURCES) $(AUDIO_INTERNALS) src/settings_internal.h \
 		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
-	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) \
-		$(REPRO_FLAGS) $(CORE_CFLAGS) $(JSON_C_CFLAGS) -o "$@" \
-		$(SOURCES) $(BASE_LDFLAGS) $(ISA_NOTE_LDFLAGS) $(LDFLAGS) \
-		$(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
-
-$(TEST_BINARY): $(SOURCES) $(AUDIO_INTERNALS) src/settings_internal.h \
-		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
-	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) -DSYNAPSE_SETTINGS_TEST_HOOKS=1 \
+	$(CC) $(BASE_CPPFLAGS) $(SETTINGS_AUDIO_CPPFLAGS) $(CPPFLAGS) \
 		$(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) $(CORE_CFLAGS) \
 		$(JSON_C_CFLAGS) -o "$@" $(SOURCES) $(BASE_LDFLAGS) \
 		$(ISA_NOTE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) $(JSON_C_LIBS) \
 		$(LDLIBS)
+
+$(TEST_BINARY): $(SOURCES) $(AUDIO_INTERNALS) src/settings_internal.h \
+		$(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
+	$(CC) $(BASE_CPPFLAGS) $(SETTINGS_AUDIO_CPPFLAGS) $(CPPFLAGS) \
+		-DSYNAPSE_SETTINGS_TEST_HOOKS=1 $(BASE_CFLAGS) $(CFLAGS) \
+		$(REPRO_FLAGS) $(CORE_CFLAGS) $(JSON_C_CFLAGS) -o "$@" \
+		$(SOURCES) $(BASE_LDFLAGS) $(ISA_NOTE_LDFLAGS) $(LDFLAGS) \
+		$(CORE_LIBS) $(JSON_C_LIBS) $(LDLIBS)
 
 $(BROKER_BINARY): $(BROKER_SOURCES) $(AUDIO_INTERNALS) \
 		src/settings_internal.h $(ISA_NOTE_SCRIPT) | $(BUILD_DIR)
@@ -312,6 +316,8 @@ endif
 test-all: all test test-gui
 	./tests/elf-isa-boundary.sh "$(BINARY)" "$(BROKER_BINARY)" \
 		"$(GUI_BINARY)" "$(GUI_PLUGIN)"
+	./tests/audio-goxlr-production-boundary.sh "$(BINARY)" "$(TEST_BINARY)" \
+		"$(BROKER_BINARY)"
 
 install: $(ALL_TARGETS)
 	install -D -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/synapse-settings"

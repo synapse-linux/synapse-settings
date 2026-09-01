@@ -33,6 +33,11 @@ Item {
     readonly property bool routeBrokerActive: backend ? backend.audioRouteBrokerActive : false
     readonly property string routeBrokerReason: backend ? backend.audioRouteBrokerReason || "" : ""
     readonly property bool routeEnforcementAvailable: backend ? backend.audioRouteEnforcementAvailable : false
+    readonly property string goxlrStatus: backend ? backend.audioGoxlrStatus || "Unavailable" : "Unavailable"
+    readonly property string goxlrReason: backend ? backend.audioGoxlrReason || "" : ""
+    readonly property bool goxlrProviderActive: backend ? backend.audioGoxlrProviderActive : false
+    readonly property bool goxlrTruncated: backend ? backend.audioGoxlrTruncated : false
+    readonly property var goxlrDevices: backend ? backend.audioGoxlrDevices || [] : []
 
     function activate() {
         if (loaded)
@@ -192,6 +197,35 @@ Item {
         return qsTr("Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
     }
 
+    function goxlrStateText() {
+        switch (goxlrStatus) {
+        case "Ready": return qsTr("Ready")
+        case "Inactive": return qsTr("Inactive")
+        case "Failed": return qsTr("Failed")
+        default: return qsTr("Unavailable")
+        }
+    }
+
+    function goxlrDetailText() {
+        if (goxlrStatus === "Ready" && goxlrDevices.length === 0)
+            return qsTr("The GoXLR provider is running and reports no devices.")
+        if (goxlrStatus === "Ready")
+            return qsTr("Devices are projected from the provider profile model, not from hardware readback.")
+        if (goxlrStatus === "Inactive")
+            return qsTr("The GoXLR provider is not running. Audio Settings did not start it.")
+        if (goxlrStatus === "Failed")
+            return qsTr("The GoXLR status response was rejected safely.")
+        return qsTr("The GoXLR status adapter is unavailable.")
+    }
+
+    function goxlrBoundaryText() {
+        return qsTr("Status is read-only. This screen cannot start the provider, change GoXLR hardware, play audio, or claim hardware readback.")
+    }
+
+    function goxlrCapabilityText(supported) {
+        return supported ? qsTr("System output capability reported") : qsTr("System output capability not reported")
+    }
+
     function controlBoundaryText() {
         return qsTr("Volume and mute affect one selected item. Synapse does not play or record a test sound and does not change routing or profiles.")
     }
@@ -211,6 +245,7 @@ Item {
         case "default-apply-failed":
         case "route-policy-failed":
         case "broker-status-unavailable":
+        case "goxlr-status-unavailable":
         case "policy-unavailable": return qsTr("The Audio operation failed safely.")
         case "audio-stream-plan-failed": return qsTr("The active stream could not be planned safely.")
         case "audio-stream-move-refused": return qsTr("The stream state changed or became unavailable. Nothing was moved.")
@@ -513,6 +548,62 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     text: root.controlBoundaryText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
+
+                Label { text: qsTr("GoXLR provider"); font.bold: true }
+                Frame {
+                    Layout.fillWidth: true
+                    RowLayout {
+                        anchors.fill: parent
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("Read-only provider status")
+                            font.bold: true
+                        }
+                        Label {
+                            text: root.goxlrStateText()
+                            color: root.goxlrProviderActive ? palette.highlight : palette.text
+                        }
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.goxlrDetailText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.goxlrBoundaryText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
+                Repeater {
+                    model: root.goxlrDevices
+                    delegate: Frame {
+                        id: goxlrRow
+                        required property var modelData
+                        Layout.fillWidth: true
+                        RowLayout {
+                            anchors.fill: parent
+                            Label {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                text: goxlrRow.modelData.model
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                text: root.goxlrCapabilityText(goxlrRow.modelData.systemOutputSupported)
+                                opacity: 0.7
+                            }
+                        }
+                    }
+                }
+                Label {
+                    visible: root.goxlrTruncated
+                    text: qsTr("Additional provider devices were omitted by the bounded status contract.")
                     wrapMode: Text.WordWrap
                     opacity: 0.7
                 }

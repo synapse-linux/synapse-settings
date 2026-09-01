@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.0-alpha.1
+
+- Add `audio goxlr-status` as a bounded read-only bridge to the fixed production
+  `/usr/bin/synapse-goxlr provider-status --format json` command.
+- Strictly decode the complete provider-status v2 contract in C11, reject
+  duplicate or unknown fields and identities, and cap execution at three
+  seconds, response bytes at 65536 and devices at eight.
+- Isolate the fixed provider-status child in its own process group with null
+  input/error streams and a monotonic deadline; classify launch, signal and
+  status-transport failures separately from a clean inactive-provider result.
+- Emit a Settings-owned v1 status contract with Ready, Inactive, Unavailable and
+  Failed outcomes while treating a missing adapter or stopped provider as typed
+  nonfatal state.
+- Redact all provider profile values and project only device model and reported
+  system-output capability; retain `provider-profile-model` as explicit source
+  authority and fix hardware readback, exact rollback and mutation availability
+  false.
+- Add independent Qt contract validation and extend the atomic load cohort to
+  inventory, policy, broker status and GoXLR status before publishing models.
+- Present localized read-only provider status without exposing device IDs,
+  provider commands, profile values or any GoXLR planning/apply invokable to
+  QML.
+- Add strict schema, malformed/duplicate/oversized/timeout fixture coverage,
+  production/test-hook separation, adapter tests, QML module tests and updated
+  `en_US` and `it_IT` catalogues.
+- Keep the candidate source-only: no installation, provider startup, hardware
+  transaction, playback, capture, package promotion or deployment is performed.
+
 ## 0.8.0-alpha.1
 
 - Add independently planned and acknowledged volume and mute transactions for

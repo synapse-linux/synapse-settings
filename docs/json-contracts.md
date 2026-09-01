@@ -19,6 +19,7 @@ fields fail closed.
 | `synapse.settings.audio-route-resolution/v1` | Deterministic per-executable resolution |
 | `synapse.settings.audio-route-broker-status/v1` | Read-only capability or active new-stream broker status |
 | `synapse.settings.audio-route-broker-receipt/v1` | Verified per-new-stream enforcement result |
+| `synapse.settings.audio-goxlr-status/v1` | Read-only redacted GoXLR provider presence and capability status |
 
 The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 8
 still sets the former true and the latter false because a policy write never
@@ -68,7 +69,25 @@ command success cannot claim routing. Both broker contracts fix
 `existingStreamMigration=false` and contain no PID, path, raw endpoint or event
 line.
 
-The Qt adapter validates exact field sets, bounds, token forms, duplicate
-identities, direction/device consistency and the honest enforcement flags before
-publishing any projection. It invokes only the C11 `audio broker-status` client
-and never forwards raw contract objects, socket paths or transport text to QML.
+The GoXLR status contract has exactly thirteen top-level fields. `status` is
+`Ready`, `Inactive`, `Unavailable` or `Failed`; only Ready permits
+`providerActive=true`, a nonzero `deviceCount`, devices or truncation. Ready has
+`reason=null`. Non-Ready states expose no devices, and their reasons are bounded
+to adapter absence, provider inactivity, timeout, oversized response, invalid
+response or local status unavailability. The maximum count is eight and must
+match the device array. Each device contains only a redacted `goxlr-1` through
+`goxlr-8` token, model, reported system-output capability and
+`controlAvailable=false`. The contract always fixes
+`stateAuthority=provider-profile-model`, `hardwareReadback=false`,
+`hardwareExactRollback=false`, `mutationAvailable=false`, `readOnly=true` and
+`bounded=true`.
+
+The C11 bridge accepts only the complete upstream
+`synapse.goxlr.provider-status/v2` contract and discards route, volume, fader,
+mute, mix and submix values after validation. The Qt adapter validates exact
+field sets, bounds, token forms, duplicate identities, direction/device
+consistency and honest authority flags before publishing any projection. It
+strips the GoXLR device token before QML publication. It invokes only the C11
+`audio broker-status` and `audio goxlr-status` clients and never forwards raw
+contract objects, socket paths, provider profile values or transport text to
+QML.

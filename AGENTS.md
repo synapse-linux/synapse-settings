@@ -39,8 +39,16 @@
   identity twice, require exact acknowledgement and postflight, and compensate
   only to the exact original value after freshly proving both identity and the
   unchanged observed value. Keep cohorts, acknowledgements and raw setter
-  identities outside QML; never
-  imply playback, capture, profile, routing, default or policy authority.
+  identities outside QML; never imply playback, capture, profile, routing,
+  default or policy authority.
+- GoXLR presence/status is read-only. Invoke only fixed production
+  `/usr/bin/synapse-goxlr provider-status --format json`, bound execution and
+  output, strictly validate the complete provider contract, then discard raw
+  profile values. A missing or inactive provider is typed state, not authority
+  to start it.
+- The GoXLR Settings contract must fix provider-profile authority, hardware
+  readback, exact rollback and mutation claims honestly. QML receives no device
+  token, profile value, command, plan or apply method.
 - Keep capture, Bluetooth pairing, safe playback tests, GoXLR control and profile
   mutation behind independent consent and capability gates.
 - Composition lock data and pacman state remain read-only inputs. Docker
@@ -59,6 +67,7 @@
   feature QML. Its production singleton targets only
   `/usr/bin/synapse-settings`; fixture selection belongs only to a separately
   compiled test plugin.
-- Shell-facing Audio state is limited to bounded booleans and typed identifiers.
+- Shell-facing Audio state is limited to bounded booleans, counts and typed
+  identifiers.
   Loading the module is read-only and never waives the independent installation,
   activation, default, policy, stream-movement or deployment gates.

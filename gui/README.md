@@ -19,6 +19,8 @@ The adapter implements these properties:
 - `audioOutputs`, `audioInputs`, `audioStreams`, `audioCards`;
 - `audioRouteRules`, `audioRouteBrokerAvailable`, `audioRouteBrokerActive`,
   `audioRouteBrokerReason`, `audioRouteEnforcementAvailable`;
+- `audioGoxlrStatus`, `audioGoxlrReason`, `audioGoxlrProviderActive`,
+  `audioGoxlrTruncated`, `audioGoxlrDevices`;
 - `audioProcessChoices`, `audioProcessChoiceOpen`;
 - `audioStatusId`, `audioErrorId`.
 
@@ -42,7 +44,8 @@ opaque stream token; the C backend privately maps the selected same-UID process
 to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
-and republishes only a complete inventory-plus-policy-plus-broker-status cohort.
+and republishes only a complete
+inventory-plus-policy-plus-broker-status-plus-GoXLR-status cohort.
 Volume and mute follow their own plan, opaque-cohort, exact-acknowledgement,
 apply, postflight and compensation contract. Every accepted plan reaches the
 apply decoder; an unchanged value is a verified `AlreadySet` receipt without a
@@ -57,3 +60,10 @@ acknowledgement. Policy persistence still does not imply stream movement. The se
 owns new-stream observation and enforcement. The adapter obtains only typed,
 read-only runtime status through the C11 CLI; QML maps it to Active, Inactive or
 Unavailable presentation and cannot start, stop or configure the service.
+
+The separate GoXLR projection is also read-only. C11 invokes only the fixed
+provider-status command, validates and strips profile values, and emits a
+Settings-owned status contract. The Qt adapter validates it again and removes
+device tokens before publishing model and reported capability. QML has no GoXLR
+operation method and cannot start the provider, change hardware, play audio or
+claim hardware readback.

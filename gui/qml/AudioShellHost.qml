@@ -12,6 +12,10 @@ Item {
     readonly property bool busy: AudioBackend.audioBusy
     readonly property bool routeBrokerActive: AudioBackend.audioRouteBrokerActive
     readonly property bool routeEnforcementAvailable: AudioBackend.audioRouteEnforcementAvailable
+    readonly property string goxlrStatus: AudioBackend.audioGoxlrStatus || "Unavailable"
+    readonly property bool goxlrProviderActive: AudioBackend.audioGoxlrProviderActive
+    readonly property int goxlrDeviceCount: AudioBackend.audioGoxlrDevices.length
+    readonly property bool goxlrTruncated: AudioBackend.audioGoxlrTruncated
     readonly property string reasonId: AudioBackend.audioReason || ""
     readonly property string statusId: AudioBackend.audioStatusId || ""
     readonly property string errorId: AudioBackend.audioErrorId || ""

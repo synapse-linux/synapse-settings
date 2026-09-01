@@ -40,6 +40,11 @@ TestCase {
             property bool audioRouteBrokerActive: false
             property string audioRouteBrokerReason: "broker-not-running"
             property bool audioRouteEnforcementAvailable: false
+            property string audioGoxlrStatus: "Ready"
+            property string audioGoxlrReason: ""
+            property bool audioGoxlrProviderActive: true
+            property bool audioGoxlrTruncated: false
+            property var audioGoxlrDevices: [{ model: "GoXLR Mini", systemOutputSupported: true }]
             property var audioProcessChoices: [{
                 id: "playback-30",
                 label: "Game",
@@ -152,6 +157,31 @@ TestCase {
         compare(section.brokerStateText(), "Unavailable")
         compare(section.brokerDetailText(), "Rules are stored; the Audio broker status was rejected safely.")
         compare(section.existingStreamBoundaryText(), "Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
+    }
+
+    function test_typedReadOnlyGoxlrStatus() {
+        let backend = createTemporaryObject(fakeBackend, this)
+        let section = createTemporaryObject(audioComponent, this, { backend: backend })
+        verify(section)
+        compare(section.goxlrStateText(), "Ready")
+        compare(section.goxlrDetailText(), "Devices are projected from the provider profile model, not from hardware readback.")
+        compare(section.goxlrBoundaryText(), "Status is read-only. This screen cannot start the provider, change GoXLR hardware, play audio, or claim hardware readback.")
+        compare(section.goxlrCapabilityText(true), "System output capability reported")
+        compare(section.goxlrCapabilityText(false), "System output capability not reported")
+        backend.audioGoxlrStatus = "Inactive"
+        backend.audioGoxlrReason = "provider-inactive"
+        backend.audioGoxlrProviderActive = false
+        backend.audioGoxlrDevices = []
+        compare(section.goxlrStateText(), "Inactive")
+        compare(section.goxlrDetailText(), "The GoXLR provider is not running. Audio Settings did not start it.")
+        backend.audioGoxlrStatus = "Unavailable"
+        backend.audioGoxlrReason = "adapter-unavailable"
+        compare(section.goxlrStateText(), "Unavailable")
+        compare(section.goxlrDetailText(), "The GoXLR status adapter is unavailable.")
+        backend.audioGoxlrStatus = "Failed"
+        backend.audioGoxlrReason = "invalid-response"
+        compare(section.goxlrStateText(), "Failed")
+        compare(section.goxlrDetailText(), "The GoXLR status response was rejected safely.")
     }
 
     function test_separatelyConfirmedSingleStreamMove() {

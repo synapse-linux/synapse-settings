@@ -91,10 +91,14 @@ assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections']
 PY
 "$binary" sections --format text >"$work/sections.txt"
 grep -Fq $'audio\tAudio\taudio-card\tavailable' "$work/sections.txt"
-[[ $($binary --version) == 'synapse-settings 0.8.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 0.9.0-alpha.1' ]]
 "$binary" --help >"$work/help.txt"
 grep -Fq 'synapse-settings audio policy set-rule' "$work/help.txt"
 grep -Fq 'synapse-settings audio plan-volume' "$work/help.txt"
+grep -Fq 'synapse-settings audio goxlr-status' "$work/help.txt"
+"$binary" audio --help >"$work/audio-help.txt"
+grep -Fq 'synapse-settings audio goxlr-status' "$work/audio-help.txt"
+"$root/tests/audio-goxlr-status-run.sh" "$binary"
 
 # Broker-status observation is independently read-only when no broker or policy
 # exists: it creates neither configuration nor runtime state and runs no pactl.
