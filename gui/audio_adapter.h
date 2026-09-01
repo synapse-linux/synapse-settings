@@ -32,6 +32,18 @@ bool decodePolicy(const QByteArray &payload,
                   AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodeBrokerStatus(const QByteArray &payload,
                         AudioPresentationSnapshot *snapshot, QString *errorId);
+bool decodeStreamMovePlan(const QByteArray &payload,
+                          const QString &expectedStream,
+                          const QString &expectedOriginalDevice,
+                          const QString &expectedRequestedDevice,
+                          QString *cohort, bool *changed, QString *errorId);
+bool decodeStreamMoveReceipt(const QByteArray &payload,
+                             const QString &expectedStream,
+                             const QString &expectedOriginalDevice,
+                             const QString &expectedRequestedDevice,
+                             QString *status, QString *reason, bool *changed,
+                             bool *rollbackAttempted, bool *rollbackVerified,
+                             QString *errorId);
 bool decodeDefaultPlan(const QByteArray &payload,
                        const QString &expectedDirection,
                        const QString &expectedDevice, bool *changed,
@@ -107,6 +119,9 @@ public:
   Q_INVOKABLE bool loadAudio();
   Q_INVOKABLE bool setAudioDefault(const QString &direction,
                                    const QString &deviceId);
+  Q_INVOKABLE bool moveAudioStream(const QString &streamId,
+                                   const QString &originalDeviceId,
+                                   const QString &requestedDeviceId);
   Q_INVOKABLE bool chooseAudioProcessRule(const QString &direction,
                                           const QString &deviceId);
   Q_INVOKABLE bool confirmAudioProcessRule(const QString &streamId);
@@ -133,19 +148,26 @@ private:
   bool startCommand(
       const QStringList &arguments, int outputLimit,
       std::function<void(int, const QByteArray &, const QString &)> callback);
-  void startInventoryLoad(const QString &successStatusId);
+  void startInventoryLoad(const QString &successStatusId,
+                          const QString &operationErrorId = QString());
   void startPolicyLoad(AudioPresentationSnapshot snapshot,
-                       const QString &successStatusId);
+                       const QString &successStatusId,
+                       const QString &operationErrorId);
   void startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
-                             const QString &successStatusId);
+                             const QString &successStatusId,
+                             const QString &operationErrorId);
   void publishSnapshot(AudioPresentationSnapshot snapshot,
-                       const QString &successStatusId);
+                       const QString &successStatusId,
+                       const QString &operationErrorId);
   void failLoad(const QString &errorId);
   void failOperation(const QString &errorId);
   void setBusy(bool busy);
   void setMessage(const QString &statusId, const QString &errorId);
   bool validDirectionDevice(const QString &direction,
                             const QString &deviceId) const;
+  QVariantMap audioStream(const QString &streamId) const;
+  bool validStreamMove(const QString &streamId, const QString &originalDeviceId,
+                       const QString &requestedDeviceId) const;
   bool validRule(const QString &ruleId) const;
   QVariantMap routeRule(const QString &ruleId) const;
   bool startRouteRule(const QString &action, const QStringList &arguments,

@@ -26,6 +26,14 @@
 - Broker activation and existing-stream movement are separate gates. Policy
   receipts must never claim that the broker moved audio; Settings may consume
   only the separate read-only broker status contract.
+- An existing stream may move only through its separate read-only plan and exact
+  acknowledgement, one opaque stream at a time. Bind the plan to the same-UID
+  process instance, exact original endpoint, requested endpoint and backend
+  index; revalidate twice before fixed-argv mutation.
+- Existing-stream success requires same-identity postflight. Roll back only to
+  the exact captured original raw endpoint and only while the same stream
+  identity remains provable. Never create or apply a policy rule as part of this
+  transaction, and keep its cohort and acknowledgement outside QML.
 - Keep capture, Bluetooth pairing, safe playback tests, GoXLR control and profile
   mutation behind independent consent and capability gates.
 - Composition lock data and pacman state remain read-only inputs. Docker

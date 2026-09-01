@@ -26,7 +26,7 @@
 #include <sys/prctl.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "0.5.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "0.6.0-alpha.1"
 #endif
 
 namespace {

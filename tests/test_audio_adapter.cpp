@@ -32,7 +32,9 @@ public:
         QByteArrayLiteral("XDG_RUNTIME_DIR"),
         QByteArrayLiteral("SYNAPSE_PACTL"),
         QByteArrayLiteral("SYNAPSE_AUDIO_FIXTURES"),
-        QByteArrayLiteral("SYNAPSE_AUDIO_ROUTE_POLICY")};
+        QByteArrayLiteral("SYNAPSE_AUDIO_ROUTE_POLICY"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_LOG"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_MODE")};
     for (const QByteArray &name : names) {
       names_.append(name);
       values_.append(qgetenv(name.constData()));
@@ -150,6 +152,32 @@ public:
         ">\"$SYNAPSE_AUDIO_FIXTURES/default-sink\" ;;\n"
         "  'set-default-source source.b ') printf 'source.b\\n' "
         ">\"$SYNAPSE_AUDIO_FIXTURES/default-source\" ;;\n"
+        "  'move-sink-input 30 sink.a') "
+        "[ -z \"${SYNAPSE_AUDIO_MOVE_LOG:-}\" ] || printf 'sink.a\\n' "
+        ">>\"$SYNAPSE_AUDIO_MOVE_LOG\"; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != fail ] || exit 65; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != timeout ] || { "
+        "sleep 5; exit 65; }; "
+        "sed 's/\"sink\":11/\"sink\":10/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\"; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != mutate-fail ] || "
+        "exit 65 ;;\n"
+        "  'move-sink-input 30 sink.b') "
+        "[ -z \"${SYNAPSE_AUDIO_MOVE_LOG:-}\" ] || printf 'sink.b\\n' "
+        ">>\"$SYNAPSE_AUDIO_MOVE_LOG\"; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != fail ] || exit 65; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != timeout ] || { "
+        "sleep 5; exit 65; }; "
+        "sed 's/\"sink\":10/\"sink\":11/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\"; "
+        "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != mutate-fail ] || "
+        "exit 65 ;;\n"
         "  *) exit 64 ;;\n"
         "esac\n");
     valid_ = writeFile(pactl_, script,
@@ -160,6 +188,7 @@ public:
   bool valid() const { return valid_; }
   QString executable() const { return executable_; }
   QString applicationDirectory() const { return applicationDirectory_; }
+  QString moveLog() const { return root_ + QStringLiteral("/move.log"); }
   QString policy() const { return policy_; }
 
   void activate() const {
@@ -286,6 +315,198 @@ private slots:
         falseReceipt, QStringLiteral("set-rule"),
         QStringLiteral("output-0123456789abcdef"), QString(), &rule, &changed,
         &error));
+
+    QString cohort;
+    const QByteArray movePlan = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-existing-stream-move-plan/"
+        "v1\",\"status\":\"Planned\",\"stream\":\"playback-30\","
+        "\"direction\":\"output\",\"originalDevice\":\"output-"
+        "0123456789abcdef\",\"requestedDevice\":\"output-fedcba9876543210\","
+        "\"cohort\":\"move-0123456789abcdef\",\"changed\":true,"
+        "\"stateAuthority\":\"pipewire-pulse-model\","
+        "\"requiresAcknowledgement\":\"synapse-settings/"
+        "audio-existing-stream-move/v1\",\"singleStream\":true,"
+        "\"postflightRequired\":true,\"rollbackOnUnverified\":true,"
+        "\"applied\":false,\"bounded\":true}\n");
+    QVERIFY(AudioContracts::decodeStreamMovePlan(
+        movePlan, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &cohort, &changed, &error));
+    QCOMPARE(cohort, QStringLiteral("move-0123456789abcdef"));
+    QVERIFY(changed);
+    QByteArray falseMovePlan = movePlan;
+    falseMovePlan.replace("\"changed\":true", "\"changed\":false");
+    QVERIFY(!AudioContracts::decodeStreamMovePlan(
+        falseMovePlan, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &cohort, &changed, &error));
+
+    QString moveStatus;
+    QString moveReason;
+    bool rollbackAttempted = false;
+    bool rollbackVerified = false;
+    const QByteArray moveReceipt = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-existing-stream-move-receipt/"
+        "v1\",\"status\":\"Applied\",\"reason\":null,\"stream\":"
+        "\"playback-30\",\"direction\":\"output\",\"originalDevice\":"
+        "\"output-0123456789abcdef\",\"requestedDevice\":"
+        "\"output-fedcba9876543210\",\"changed\":true,\"moveApplied\":true,"
+        "\"verified\":true,\"rollbackAttempted\":false,"
+        "\"rollbackVerified\":false,\"stateAuthority\":"
+        "\"pipewire-pulse-model\",\"requiresAcknowledgement\":"
+        "\"synapse-settings/audio-existing-stream-move/v1\","
+        "\"singleStream\":true,\"policyApplied\":false,"
+        "\"persistentRuleCreated\":false,\"existingStreamMovement\":true,"
+        "\"bounded\":true}\n");
+    QVERIFY(AudioContracts::decodeStreamMoveReceipt(
+        moveReceipt, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+    QCOMPARE(moveStatus, QStringLiteral("Applied"));
+    QVERIFY(moveReason.isEmpty());
+    QVERIFY(changed);
+    QVERIFY(!rollbackAttempted && !rollbackVerified);
+    QByteArray expandedMoveReceipt = moveReceipt;
+    expandedMoveReceipt.replace("\"bounded\":true",
+                                "\"unknown\":0,\"bounded\":true");
+    QVERIFY(!AudioContracts::decodeStreamMoveReceipt(
+        expandedMoveReceipt, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+    QByteArray falsePolicyMoveReceipt = moveReceipt;
+    falsePolicyMoveReceipt.replace("\"policyApplied\":false",
+                                   "\"policyApplied\":true");
+    QVERIFY(!AudioContracts::decodeStreamMoveReceipt(
+        falsePolicyMoveReceipt, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+    QByteArray rollbackReceipt = moveReceipt;
+    rollbackReceipt.replace("\"status\":\"Applied\",\"reason\":null",
+                            "\"status\":\"Failed\",\"reason\":\"move-failed\"");
+    rollbackReceipt.replace("\"changed\":true,\"moveApplied\":true,"
+                            "\"verified\":true,\"rollbackAttempted\":false,"
+                            "\"rollbackVerified\":false",
+                            "\"changed\":false,\"moveApplied\":false,"
+                            "\"verified\":false,\"rollbackAttempted\":true,"
+                            "\"rollbackVerified\":true");
+    QVERIFY(AudioContracts::decodeStreamMoveReceipt(
+        rollbackReceipt, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+    QCOMPARE(moveStatus, QStringLiteral("Failed"));
+    QCOMPARE(moveReason, QStringLiteral("move-failed"));
+    QVERIFY(rollbackAttempted && rollbackVerified);
+    QByteArray falseRollbackReceipt = rollbackReceipt;
+    falseRollbackReceipt.replace("\"rollbackAttempted\":true",
+                                 "\"rollbackAttempted\":false");
+    QVERIFY(!AudioContracts::decodeStreamMoveReceipt(
+        falseRollbackReceipt, QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+
+    QByteArray oversizedStreamPlan = movePlan;
+    oversizedStreamPlan.replace("playback-30", "playback-2147483648");
+    QVERIFY(!AudioContracts::decodeStreamMovePlan(
+        oversizedStreamPlan, QStringLiteral("playback-2147483648"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &cohort, &changed, &error));
+
+    const QJsonObject appliedObject =
+        QJsonDocument::fromJson(moveReceipt).object();
+    QJsonObject alreadyObject = appliedObject;
+    alreadyObject.insert(QStringLiteral("status"),
+                         QStringLiteral("AlreadyRouted"));
+    alreadyObject.insert(QStringLiteral("reason"), QJsonValue::Null);
+    alreadyObject.insert(QStringLiteral("requestedDevice"),
+                         QStringLiteral("output-0123456789abcdef"));
+    alreadyObject.insert(QStringLiteral("changed"), false);
+    alreadyObject.insert(QStringLiteral("moveApplied"), false);
+    alreadyObject.insert(QStringLiteral("verified"), true);
+    QVERIFY(AudioContracts::decodeStreamMoveReceipt(
+        QJsonDocument(alreadyObject).toJson(QJsonDocument::Compact),
+        QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-0123456789abcdef"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
+    QCOMPARE(moveStatus, QStringLiteral("AlreadyRouted"));
+    QVERIFY(!changed && moveReason.isEmpty());
+
+    const QStringList refusedReasons = {
+        QStringLiteral("audio-unavailable"),
+        QStringLiteral("stream-vanished"),
+        QStringLiteral("process-unavailable"),
+        QStringLiteral("target-unavailable"),
+        QStringLiteral("current-target-unavailable"),
+        QStringLiteral("original-target-mismatch"),
+        QStringLiteral("stream-cohort-changed"),
+        QStringLiteral("stream-identity-changed"),
+    };
+    for (const QString &refusedReason : refusedReasons) {
+      QJsonObject refusedObject = appliedObject;
+      refusedObject.insert(QStringLiteral("status"), QStringLiteral("Refused"));
+      refusedObject.insert(QStringLiteral("reason"), refusedReason);
+      refusedObject.insert(QStringLiteral("changed"), false);
+      refusedObject.insert(QStringLiteral("moveApplied"), false);
+      refusedObject.insert(QStringLiteral("verified"), false);
+      QVERIFY2(AudioContracts::decodeStreamMoveReceipt(
+                   QJsonDocument(refusedObject).toJson(QJsonDocument::Compact),
+                   QStringLiteral("playback-30"),
+                   QStringLiteral("output-0123456789abcdef"),
+                   QStringLiteral("output-fedcba9876543210"), &moveStatus,
+                   &moveReason, &changed, &rollbackAttempted, &rollbackVerified,
+                   &error),
+               qPrintable(refusedReason));
+      QCOMPARE(moveStatus, QStringLiteral("Refused"));
+      QCOMPARE(moveReason, refusedReason);
+    }
+
+    const QStringList failedReasons = {
+        QStringLiteral("stream-vanished"),
+        QStringLiteral("move-timeout"),
+        QStringLiteral("move-failed"),
+        QStringLiteral("verification-failed"),
+        QStringLiteral("verification-unavailable"),
+        QStringLiteral("stream-identity-changed"),
+    };
+    for (const QString &failedReason : failedReasons) {
+      QJsonObject failedObject = appliedObject;
+      failedObject.insert(QStringLiteral("status"), QStringLiteral("Failed"));
+      failedObject.insert(QStringLiteral("reason"), failedReason);
+      failedObject.insert(QStringLiteral("changed"), false);
+      failedObject.insert(QStringLiteral("moveApplied"), false);
+      failedObject.insert(QStringLiteral("verified"), false);
+      QVERIFY2(AudioContracts::decodeStreamMoveReceipt(
+                   QJsonDocument(failedObject).toJson(QJsonDocument::Compact),
+                   QStringLiteral("playback-30"),
+                   QStringLiteral("output-0123456789abcdef"),
+                   QStringLiteral("output-fedcba9876543210"), &moveStatus,
+                   &moveReason, &changed, &rollbackAttempted, &rollbackVerified,
+                   &error),
+               qPrintable(failedReason));
+      QCOMPARE(moveStatus, QStringLiteral("Failed"));
+      QCOMPARE(moveReason, failedReason);
+    }
+
+    QJsonObject invalidRollbackReason = appliedObject;
+    invalidRollbackReason.insert(QStringLiteral("status"),
+                                 QStringLiteral("Failed"));
+    invalidRollbackReason.insert(QStringLiteral("reason"),
+                                 QStringLiteral("verification-failed"));
+    invalidRollbackReason.insert(QStringLiteral("changed"), false);
+    invalidRollbackReason.insert(QStringLiteral("moveApplied"), false);
+    invalidRollbackReason.insert(QStringLiteral("verified"), false);
+    invalidRollbackReason.insert(QStringLiteral("rollbackAttempted"), true);
+    QVERIFY(!AudioContracts::decodeStreamMoveReceipt(
+        QJsonDocument(invalidRollbackReason).toJson(QJsonDocument::Compact),
+        QStringLiteral("playback-30"),
+        QStringLiteral("output-0123456789abcdef"),
+        QStringLiteral("output-fedcba9876543210"), &moveStatus, &moveReason,
+        &changed, &rollbackAttempted, &rollbackVerified, &error));
   }
 
   void loadAndGuardedMutations() {
@@ -327,7 +548,80 @@ private slots:
                               .toMap()
                               .value(QStringLiteral("id"))
                               .toString();
+    const QString integratedOutput = adapter.audioOutputs()
+                                         .constFirst()
+                                         .toMap()
+                                         .value(QStringLiteral("id"))
+                                         .toString();
+    const QString activeStream = adapter.audioStreams()
+                                     .constFirst()
+                                     .toMap()
+                                     .value(QStringLiteral("id"))
+                                     .toString();
+    QVERIFY(adapter.audioStreams()
+                .constFirst()
+                .toMap()
+                .value(QStringLiteral("moveAvailable"))
+                .toBool());
+    QVERIFY(writeFile(fixture.moveLog(), QByteArray()));
+    qputenv("SYNAPSE_AUDIO_MOVE_LOG", fixture.moveLog().toUtf8());
     QSignalSpy operations(&adapter, &AudioAdapter::audioOperationFinished);
+    QVERIFY(adapter.moveAudioStream(activeStream, output, integratedOutput));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
+                              QStringLiteral("audio-stream-moved"), 15000);
+    QCOMPARE(adapter.audioStreams()
+                 .constFirst()
+                 .toMap()
+                 .value(QStringLiteral("target"))
+                 .toString(),
+             integratedOutput);
+    QFile moveLog(fixture.moveLog());
+    QVERIFY(moveLog.open(QIODevice::ReadOnly));
+    QCOMPARE(moveLog.readAll(), QByteArrayLiteral("sink.a\n"));
+    moveLog.close();
+
+    QVERIFY(adapter.moveAudioStream(activeStream, integratedOutput,
+                                    integratedOutput));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
+                              QStringLiteral("audio-stream-unchanged"), 15000);
+    QVERIFY(moveLog.open(QIODevice::ReadOnly));
+    QCOMPARE(moveLog.readAll(), QByteArrayLiteral("sink.a\n"));
+    moveLog.close();
+
+    qputenv("SYNAPSE_AUDIO_MOVE_MODE", QByteArrayLiteral("fail"));
+    QVERIFY(adapter.moveAudioStream(activeStream, integratedOutput, output));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(),
+                              QStringLiteral("audio-stream-move-failed"),
+                              15000);
+    QVERIFY(adapter.audioStatusId().isEmpty());
+    QCOMPARE(adapter.audioStreams()
+                 .constFirst()
+                 .toMap()
+                 .value(QStringLiteral("target"))
+                 .toString(),
+             integratedOutput);
+    QVERIFY(moveLog.open(QIODevice::ReadOnly));
+    QCOMPARE(moveLog.readAll(), QByteArrayLiteral("sink.a\nsink.b\n"));
+    moveLog.close();
+
+    qputenv("SYNAPSE_AUDIO_MOVE_MODE", QByteArrayLiteral("mutate-fail"));
+    QVERIFY(adapter.moveAudioStream(activeStream, integratedOutput, output));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(),
+                              QStringLiteral("audio-stream-move-restored"),
+                              15000);
+    QCOMPARE(adapter.audioStreams()
+                 .constFirst()
+                 .toMap()
+                 .value(QStringLiteral("target"))
+                 .toString(),
+             integratedOutput);
+    QVERIFY(moveLog.open(QIODevice::ReadOnly));
+    QCOMPARE(moveLog.readAll(),
+             QByteArrayLiteral("sink.a\nsink.b\nsink.b\nsink.a\n"));
+    moveLog.close();
+    qunsetenv("SYNAPSE_AUDIO_MOVE_MODE");
+    QVERIFY(!QFileInfo::exists(fixture.policy()));
+
     QVERIFY(adapter.setAudioDefault(QStringLiteral("output"), output));
     QTRY_COMPARE_WITH_TIMEOUT(adapter.audioStatusId(),
                               QStringLiteral("audio-default-applied"), 15000);
@@ -372,7 +666,7 @@ private slots:
                               QStringLiteral("audio-route-rule-removed"),
                               15000);
     QCOMPARE(adapter.audioRouteRules().size(), 2);
-    QVERIFY(operations.size() >= 4);
+    QVERIFY(operations.size() >= 5);
 
     const QFileInfo policy(fixture.policy());
     QVERIFY(policy.isFile());
@@ -388,6 +682,47 @@ private slots:
     const QByteArray serialized = policyDocument.toJson(QJsonDocument::Compact);
     QVERIFY(!serialized.contains("\"pid\""));
     QVERIFY(!serialized.contains("processName"));
+  }
+
+  void applyTransportFailureRefreshesSnapshot() {
+    ScopedEnvironment restore;
+    AudioFixture fixture;
+    QVERIFY(fixture.valid());
+    fixture.activate();
+    AudioAdapter adapter(
+        testBackend(), [](const QString &) { return QString(); }, 500);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 10000);
+    const QString requested = adapter.audioOutputs()
+                                  .constFirst()
+                                  .toMap()
+                                  .value(QStringLiteral("id"))
+                                  .toString();
+    const QString original = adapter.audioOutputs()
+                                 .at(1)
+                                 .toMap()
+                                 .value(QStringLiteral("id"))
+                                 .toString();
+    const QString stream = adapter.audioStreams()
+                               .constFirst()
+                               .toMap()
+                               .value(QStringLiteral("id"))
+                               .toString();
+    qputenv("SYNAPSE_AUDIO_MOVE_MODE", QByteArrayLiteral("timeout"));
+    QVERIFY(adapter.moveAudioStream(stream, original, requested));
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(), QStringLiteral("timeout"),
+                              10000);
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 2, 10000);
+    QCOMPARE(loaded.constLast().constFirst().toBool(), true);
+    QVERIFY(adapter.audioAvailable());
+    QVERIFY(!adapter.audioBusy());
+    QCOMPARE(adapter.audioStreams()
+                 .constFirst()
+                 .toMap()
+                 .value(QStringLiteral("target"))
+                 .toString(),
+             original);
   }
 
   void invalidSelectionAndConcurrentLoadFailClosed() {
@@ -411,6 +746,11 @@ private slots:
              QStringLiteral("audio-process-unavailable"));
     QVERIFY(!adapter.setAudioDefault(
         QStringLiteral("output"), QStringLiteral("output-0000000000000000")));
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("selection-invalid"));
+    QVERIFY(
+        !adapter.moveAudioStream(QStringLiteral("playback-30"),
+                                 QStringLiteral("output-0000000000000000"),
+                                 QStringLiteral("output-0123456789abcdef")));
     QCOMPARE(adapter.audioErrorId(), QStringLiteral("selection-invalid"));
     QVERIFY(!adapter.removeAudioRouteRule(QStringLiteral("rule-9999")));
   }

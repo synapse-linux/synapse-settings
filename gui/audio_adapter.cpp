@@ -33,6 +33,8 @@ constexpr int kMaximumRules = 128;
 constexpr char kDefaultAcknowledgement[] = "synapse-settings/audio-default/v1";
 constexpr char kRouteAcknowledgement[] =
     "synapse-settings/audio-route-policy/v1";
+constexpr char kStreamMoveAcknowledgement[] =
+    "synapse-settings/audio-existing-stream-move/v1";
 
 bool fail(QString *errorId, const QString &value) {
   if (errorId)
@@ -134,6 +136,37 @@ const QRegularExpression &streamTokenExpression() {
   static const QRegularExpression value(
       QStringLiteral("^(playback|recording)-(0|[1-9][0-9]{0,9})$"));
   return value;
+}
+
+const QRegularExpression &streamMoveCohortExpression() {
+  static const QRegularExpression value(QStringLiteral("^move-[0-9a-f]{16}$"));
+  return value;
+}
+
+const QSet<QString> &streamMoveRefusedReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("audio-unavailable"),
+      QStringLiteral("stream-vanished"),
+      QStringLiteral("process-unavailable"),
+      QStringLiteral("target-unavailable"),
+      QStringLiteral("current-target-unavailable"),
+      QStringLiteral("original-target-mismatch"),
+      QStringLiteral("stream-cohort-changed"),
+      QStringLiteral("stream-identity-changed"),
+  };
+  return values;
+}
+
+const QSet<QString> &streamMoveFailedReasonIds() {
+  static const QSet<QString> values = {
+      QStringLiteral("stream-vanished"),
+      QStringLiteral("move-timeout"),
+      QStringLiteral("move-failed"),
+      QStringLiteral("verification-failed"),
+      QStringLiteral("verification-unavailable"),
+      QStringLiteral("stream-identity-changed"),
+  };
+  return values;
 }
 
 const QSet<QString> &brokerReasonIds() {
@@ -290,8 +323,12 @@ bool decodeStreams(const QJsonValue &value, const QSet<QString> &outputs,
     item.insert(QStringLiteral("volumePercent"), static_cast<int>(volume));
     item.insert(QStringLiteral("muted"),
                 object.value(QStringLiteral("muted")).toBool());
-    item.insert(QStringLiteral("processRuleAvailable"),
-                object.value(QStringLiteral("processRuleAvailable")).toBool());
+    const bool processRuleAvailable =
+        object.value(QStringLiteral("processRuleAvailable")).toBool();
+    item.insert(QStringLiteral("processRuleAvailable"), processRuleAvailable);
+    item.insert(QStringLiteral("moveAvailable"),
+                processRuleAvailable &&
+                    target != QStringLiteral("unavailable"));
     decoded.append(item);
   }
   *items = std::move(decoded);
@@ -605,6 +642,186 @@ bool decodeBrokerStatus(const QByteArray &payload,
   return true;
 }
 
+bool decodeStreamMovePlan(const QByteArray &payload,
+                          const QString &expectedStream,
+                          const QString &expectedOriginalDevice,
+                          const QString &expectedRequestedDevice,
+                          QString *cohort, bool *changed, QString *errorId) {
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumReceiptBytes, &object, errorId))
+    return false;
+  const QRegularExpressionMatch streamMatch =
+      streamTokenExpression().match(expectedStream);
+  bool indexOk = false;
+  const qlonglong streamIndex = streamMatch.captured(2).toLongLong(&indexOk);
+  const QString direction =
+      streamMatch.captured(1) == QStringLiteral("playback")
+          ? QStringLiteral("output")
+          : QStringLiteral("input");
+  QString decodedCohort;
+  if (!streamMatch.hasMatch() || !indexOk || streamIndex < 0 ||
+      streamIndex > 2147483647LL ||
+      !exactKeys(object,
+                 {"schema", "status", "stream", "direction", "originalDevice",
+                  "requestedDevice", "cohort", "changed", "stateAuthority",
+                  "requiresAcknowledgement", "singleStream",
+                  "postflightRequired", "rollbackOnUnverified", "applied",
+                  "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral(
+              "synapse.settings.audio-existing-stream-move-plan/v1") ||
+      object.value(QStringLiteral("status")).toString() !=
+          QStringLiteral("Planned") ||
+      object.value(QStringLiteral("stream")).toString() != expectedStream ||
+      object.value(QStringLiteral("direction")).toString() != direction ||
+      object.value(QStringLiteral("originalDevice")).toString() !=
+          expectedOriginalDevice ||
+      object.value(QStringLiteral("requestedDevice")).toString() !=
+          expectedRequestedDevice ||
+      !endpointToken(direction, expectedOriginalDevice) ||
+      !endpointToken(direction, expectedRequestedDevice) ||
+      !boundedText(object.value(QStringLiteral("cohort")), 21, &decodedCohort,
+                   false) ||
+      !tokenMatches(decodedCohort, streamMoveCohortExpression()) ||
+      !object.value(QStringLiteral("changed")).isBool() ||
+      object.value(QStringLiteral("changed")).toBool() !=
+          (expectedOriginalDevice != expectedRequestedDevice) ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("pipewire-pulse-model") ||
+      object.value(QStringLiteral("requiresAcknowledgement")).toString() !=
+          QString::fromLatin1(kStreamMoveAcknowledgement) ||
+      !object.value(QStringLiteral("singleStream")).isBool() ||
+      !object.value(QStringLiteral("singleStream")).toBool() ||
+      !object.value(QStringLiteral("postflightRequired")).isBool() ||
+      !object.value(QStringLiteral("postflightRequired")).toBool() ||
+      !object.value(QStringLiteral("rollbackOnUnverified")).isBool() ||
+      !object.value(QStringLiteral("rollbackOnUnverified")).toBool() ||
+      !object.value(QStringLiteral("applied")).isBool() ||
+      object.value(QStringLiteral("applied")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  if (cohort)
+    *cohort = decodedCohort;
+  if (changed)
+    *changed = object.value(QStringLiteral("changed")).toBool();
+  return true;
+}
+
+bool decodeStreamMoveReceipt(const QByteArray &payload,
+                             const QString &expectedStream,
+                             const QString &expectedOriginalDevice,
+                             const QString &expectedRequestedDevice,
+                             QString *status, QString *reason, bool *changed,
+                             bool *rollbackAttempted, bool *rollbackVerified,
+                             QString *errorId) {
+  QJsonObject object;
+  if (!oneJsonObject(payload, kMaximumReceiptBytes, &object, errorId))
+    return false;
+  const QRegularExpressionMatch streamMatch =
+      streamTokenExpression().match(expectedStream);
+  bool indexOk = false;
+  const qlonglong streamIndex = streamMatch.captured(2).toLongLong(&indexOk);
+  const QString direction =
+      streamMatch.captured(1) == QStringLiteral("playback")
+          ? QStringLiteral("output")
+          : QStringLiteral("input");
+  if (!streamMatch.hasMatch() || !indexOk || streamIndex < 0 ||
+      streamIndex > 2147483647LL ||
+      !exactKeys(object,
+                 {"schema", "status", "reason", "stream", "direction",
+                  "originalDevice", "requestedDevice", "changed", "moveApplied",
+                  "verified", "rollbackAttempted", "rollbackVerified",
+                  "stateAuthority", "requiresAcknowledgement", "singleStream",
+                  "policyApplied", "persistentRuleCreated",
+                  "existingStreamMovement", "bounded"}) ||
+      object.value(QStringLiteral("schema")).toString() !=
+          QStringLiteral(
+              "synapse.settings.audio-existing-stream-move-receipt/v1") ||
+      object.value(QStringLiteral("stream")).toString() != expectedStream ||
+      object.value(QStringLiteral("direction")).toString() != direction ||
+      object.value(QStringLiteral("originalDevice")).toString() !=
+          expectedOriginalDevice ||
+      object.value(QStringLiteral("requestedDevice")).toString() !=
+          expectedRequestedDevice ||
+      !endpointToken(direction, expectedOriginalDevice) ||
+      !endpointToken(direction, expectedRequestedDevice) ||
+      !object.value(QStringLiteral("changed")).isBool() ||
+      !object.value(QStringLiteral("moveApplied")).isBool() ||
+      !object.value(QStringLiteral("verified")).isBool() ||
+      !object.value(QStringLiteral("rollbackAttempted")).isBool() ||
+      !object.value(QStringLiteral("rollbackVerified")).isBool() ||
+      object.value(QStringLiteral("stateAuthority")).toString() !=
+          QStringLiteral("pipewire-pulse-model") ||
+      object.value(QStringLiteral("requiresAcknowledgement")).toString() !=
+          QString::fromLatin1(kStreamMoveAcknowledgement) ||
+      !object.value(QStringLiteral("singleStream")).isBool() ||
+      !object.value(QStringLiteral("singleStream")).toBool() ||
+      !object.value(QStringLiteral("policyApplied")).isBool() ||
+      object.value(QStringLiteral("policyApplied")).toBool() ||
+      !object.value(QStringLiteral("persistentRuleCreated")).isBool() ||
+      object.value(QStringLiteral("persistentRuleCreated")).toBool() ||
+      !object.value(QStringLiteral("existingStreamMovement")).isBool() ||
+      !object.value(QStringLiteral("existingStreamMovement")).toBool() ||
+      !object.value(QStringLiteral("bounded")).isBool() ||
+      !object.value(QStringLiteral("bounded")).toBool())
+    return fail(errorId, QStringLiteral("contract-invalid"));
+
+  const QString decodedStatus =
+      object.value(QStringLiteral("status")).toString();
+  if (!QStringList({QStringLiteral("Applied"), QStringLiteral("AlreadyRouted"),
+                    QStringLiteral("Refused"), QStringLiteral("Failed")})
+           .contains(decodedStatus))
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  QString decodedReason;
+  if (object.value(QStringLiteral("reason")).isNull()) {
+    decodedReason.clear();
+  } else if (!boundedText(object.value(QStringLiteral("reason")), 47,
+                          &decodedReason, false)) {
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  }
+  const bool valueChanged = object.value(QStringLiteral("changed")).toBool();
+  const bool moveApplied = object.value(QStringLiteral("moveApplied")).toBool();
+  const bool valueVerified = object.value(QStringLiteral("verified")).toBool();
+  const bool attempted =
+      object.value(QStringLiteral("rollbackAttempted")).toBool();
+  const bool restored =
+      object.value(QStringLiteral("rollbackVerified")).toBool();
+  const bool validApplied =
+      decodedStatus == QStringLiteral("Applied") && decodedReason.isEmpty() &&
+      expectedOriginalDevice != expectedRequestedDevice && valueChanged &&
+      moveApplied && valueVerified && !attempted && !restored;
+  const bool validAlready = decodedStatus == QStringLiteral("AlreadyRouted") &&
+                            decodedReason.isEmpty() &&
+                            expectedOriginalDevice == expectedRequestedDevice &&
+                            !valueChanged && !moveApplied && valueVerified &&
+                            !attempted && !restored;
+  const bool validRefused =
+      decodedStatus == QStringLiteral("Refused") &&
+      streamMoveRefusedReasonIds().contains(decodedReason) && !valueChanged &&
+      !moveApplied && !valueVerified && !attempted && !restored;
+  const bool validFailed =
+      decodedStatus == QStringLiteral("Failed") &&
+      expectedOriginalDevice != expectedRequestedDevice &&
+      streamMoveFailedReasonIds().contains(decodedReason) && !valueChanged &&
+      !moveApplied && !valueVerified && (!restored || attempted) &&
+      (!attempted || decodedReason == QStringLiteral("move-timeout") ||
+       decodedReason == QStringLiteral("move-failed"));
+  if (!validApplied && !validAlready && !validRefused && !validFailed)
+    return fail(errorId, QStringLiteral("contract-invalid"));
+  if (status)
+    *status = decodedStatus;
+  if (reason)
+    *reason = decodedReason;
+  if (changed)
+    *changed = valueChanged;
+  if (rollbackAttempted)
+    *rollbackAttempted = attempted;
+  if (rollbackVerified)
+    *rollbackVerified = restored;
+  return true;
+}
+
 bool decodeDefaultPlan(const QByteArray &payload,
                        const QString &expectedDirection,
                        const QString &expectedDevice, bool *changed,
@@ -862,13 +1079,15 @@ bool AudioAdapter::loadAudio() {
   return true;
 }
 
-void AudioAdapter::startInventoryLoad(const QString &successStatusId) {
+void AudioAdapter::startInventoryLoad(const QString &successStatusId,
+                                      const QString &operationErrorId) {
   const bool started = startCommand(
       {QStringLiteral("audio"), QStringLiteral("inventory"),
        QStringLiteral("--format"), QStringLiteral("json")},
       static_cast<int>(kMaximumInventoryBytes),
-      [this, successStatusId](int exitCode, const QByteArray &payload,
-                              const QString &commandError) {
+      [this, successStatusId, operationErrorId](int exitCode,
+                                                const QByteArray &payload,
+                                                const QString &commandError) {
         if (!commandError.isEmpty() || exitCode != 0) {
           failLoad(commandError.isEmpty() ? QStringLiteral("backend-failed")
                                           : commandError);
@@ -880,22 +1099,23 @@ void AudioAdapter::startInventoryLoad(const QString &successStatusId) {
           failLoad(errorId);
           return;
         }
-        startPolicyLoad(std::move(snapshot), successStatusId);
+        startPolicyLoad(std::move(snapshot), successStatusId, operationErrorId);
       });
   if (!started)
     failLoad(QStringLiteral("backend-unavailable"));
 }
 
 void AudioAdapter::startPolicyLoad(AudioPresentationSnapshot snapshot,
-                                   const QString &successStatusId) {
+                                   const QString &successStatusId,
+                                   const QString &operationErrorId) {
   const bool started = startCommand(
       {QStringLiteral("audio"), QStringLiteral("policy"),
        QStringLiteral("show"), QStringLiteral("--format"),
        QStringLiteral("json")},
       static_cast<int>(kMaximumPolicyBytes),
-      [this, snapshot = std::move(snapshot),
-       successStatusId](int exitCode, const QByteArray &payload,
-                        const QString &commandError) mutable {
+      [this, snapshot = std::move(snapshot), successStatusId,
+       operationErrorId](int exitCode, const QByteArray &payload,
+                         const QString &commandError) mutable {
         if (!commandError.isEmpty() || exitCode != 0) {
           failLoad(commandError.isEmpty() ? QStringLiteral("policy-unavailable")
                                           : commandError);
@@ -906,21 +1126,23 @@ void AudioAdapter::startPolicyLoad(AudioPresentationSnapshot snapshot,
           failLoad(errorId);
           return;
         }
-        startBrokerStatusLoad(std::move(snapshot), successStatusId);
+        startBrokerStatusLoad(std::move(snapshot), successStatusId,
+                              operationErrorId);
       });
   if (!started)
     failLoad(QStringLiteral("backend-unavailable"));
 }
 
 void AudioAdapter::startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
-                                         const QString &successStatusId) {
+                                         const QString &successStatusId,
+                                         const QString &operationErrorId) {
   const bool started = startCommand(
       {QStringLiteral("audio"), QStringLiteral("broker-status"),
        QStringLiteral("--format"), QStringLiteral("json")},
       static_cast<int>(kMaximumBrokerStatusBytes),
-      [this, snapshot = std::move(snapshot),
-       successStatusId](int exitCode, const QByteArray &payload,
-                        const QString &commandError) mutable {
+      [this, snapshot = std::move(snapshot), successStatusId,
+       operationErrorId](int exitCode, const QByteArray &payload,
+                         const QString &commandError) mutable {
         if (!commandError.isEmpty() || exitCode != 0) {
           failLoad(commandError.isEmpty()
                        ? QStringLiteral("broker-status-unavailable")
@@ -932,20 +1154,21 @@ void AudioAdapter::startBrokerStatusLoad(AudioPresentationSnapshot snapshot,
           failLoad(errorId);
           return;
         }
-        publishSnapshot(std::move(snapshot), successStatusId);
+        publishSnapshot(std::move(snapshot), successStatusId, operationErrorId);
       });
   if (!started)
     failLoad(QStringLiteral("backend-unavailable"));
 }
 
 void AudioAdapter::publishSnapshot(AudioPresentationSnapshot snapshot,
-                                   const QString &successStatusId) {
+                                   const QString &successStatusId,
+                                   const QString &operationErrorId) {
   snapshot_ = std::move(snapshot);
   emit audioModelsChanged();
   setBusy(false);
-  setMessage(successStatusId, QString());
+  setMessage(successStatusId, operationErrorId);
   emit audioLoaded(true);
-  if (!successStatusId.isEmpty())
+  if (!successStatusId.isEmpty() || !operationErrorId.isEmpty())
     emit audioOperationFinished(successStatusId);
 }
 
@@ -977,6 +1200,36 @@ bool AudioAdapter::validDirectionDevice(const QString &direction,
       return true;
   }
   return false;
+}
+
+QVariantMap AudioAdapter::audioStream(const QString &streamId) const {
+  if (!tokenMatches(streamId, streamTokenExpression()))
+    return {};
+  for (const QVariant &entry : snapshot_.streams) {
+    const QVariantMap stream = entry.toMap();
+    if (stream.value(QStringLiteral("id")).toString() == streamId)
+      return stream;
+  }
+  return {};
+}
+
+bool AudioAdapter::validStreamMove(const QString &streamId,
+                                   const QString &originalDeviceId,
+                                   const QString &requestedDeviceId) const {
+  if (!snapshot_.available || !snapshot_.mutationAvailable)
+    return false;
+  const QVariantMap stream = audioStream(streamId);
+  if (stream.isEmpty() ||
+      !stream.value(QStringLiteral("moveAvailable")).toBool() ||
+      stream.value(QStringLiteral("target")).toString() != originalDeviceId)
+    return false;
+  const QString direction =
+      stream.value(QStringLiteral("direction")).toString() ==
+              QStringLiteral("playback")
+          ? QStringLiteral("output")
+          : QStringLiteral("input");
+  return validDirectionDevice(direction, originalDeviceId) &&
+         validDirectionDevice(direction, requestedDeviceId);
 }
 
 bool AudioAdapter::setAudioDefault(const QString &direction,
@@ -1039,6 +1292,105 @@ bool AudioAdapter::setAudioDefault(const QString &direction,
               startInventoryLoad(
                   changed ? QStringLiteral("audio-default-applied")
                           : QStringLiteral("audio-default-unchanged"));
+            });
+        if (!applyStarted)
+          failOperation(QStringLiteral("backend-unavailable"));
+      });
+  if (!started)
+    failOperation(QStringLiteral("backend-unavailable"));
+  return started;
+}
+
+bool AudioAdapter::moveAudioStream(const QString &streamId,
+                                   const QString &originalDeviceId,
+                                   const QString &requestedDeviceId) {
+  if (busy_ ||
+      !validStreamMove(streamId, originalDeviceId, requestedDeviceId)) {
+    setMessage(QString(), QStringLiteral("selection-invalid"));
+    return false;
+  }
+  clearProcessChoice();
+  setMessage(QString(), QString());
+  setBusy(true);
+  const bool started = startCommand(
+      {QStringLiteral("audio"), QStringLiteral("plan-stream-move"),
+       QStringLiteral("--stream"), streamId, QStringLiteral("--device"),
+       requestedDeviceId, QStringLiteral("--format"), QStringLiteral("json")},
+      static_cast<int>(kMaximumReceiptBytes),
+      [this, streamId, originalDeviceId,
+       requestedDeviceId](int exitCode, const QByteArray &payload,
+                          const QString &commandError) {
+        if (!commandError.isEmpty() || exitCode != 0) {
+          failOperation(commandError.isEmpty()
+                            ? QStringLiteral("audio-stream-plan-failed")
+                            : commandError);
+          return;
+        }
+        QString cohort;
+        bool planChanged = false;
+        QString errorId;
+        if (!AudioContracts::decodeStreamMovePlan(
+                payload, streamId, originalDeviceId, requestedDeviceId, &cohort,
+                &planChanged, &errorId)) {
+          failOperation(errorId);
+          return;
+        }
+        if (!planChanged) {
+          startInventoryLoad(QStringLiteral("audio-stream-unchanged"));
+          return;
+        }
+        const bool applyStarted = startCommand(
+            {QStringLiteral("audio"), QStringLiteral("move-stream"),
+             QStringLiteral("--stream"), streamId,
+             QStringLiteral("--from-device"), originalDeviceId,
+             QStringLiteral("--device"), requestedDeviceId,
+             QStringLiteral("--cohort"), cohort, QStringLiteral("--ack"),
+             QString::fromLatin1(kStreamMoveAcknowledgement),
+             QStringLiteral("--format"), QStringLiteral("json")},
+            static_cast<int>(kMaximumReceiptBytes),
+            [this, streamId, originalDeviceId, requestedDeviceId](
+                int applyExitCode, const QByteArray &applyPayload,
+                const QString &applyError) {
+              if (!applyError.isEmpty()) {
+                startInventoryLoad(QString(), applyError);
+                return;
+              }
+              QString receiptStatus;
+              QString receiptReason;
+              bool receiptChanged = false;
+              bool rollbackAttempted = false;
+              bool rollbackVerified = false;
+              QString receiptError;
+              if (!AudioContracts::decodeStreamMoveReceipt(
+                      applyPayload, streamId, originalDeviceId,
+                      requestedDeviceId, &receiptStatus, &receiptReason,
+                      &receiptChanged, &rollbackAttempted, &rollbackVerified,
+                      &receiptError)) {
+                startInventoryLoad(QString(), receiptError);
+                return;
+              }
+              const bool success =
+                  receiptStatus == QStringLiteral("Applied") ||
+                  receiptStatus == QStringLiteral("AlreadyRouted");
+              if ((success && applyExitCode != 0) ||
+                  (!success && applyExitCode != 1)) {
+                startInventoryLoad(QString(),
+                                   QStringLiteral("contract-invalid"));
+                return;
+              }
+              if (success) {
+                startInventoryLoad(
+                    receiptChanged ? QStringLiteral("audio-stream-moved")
+                                   : QStringLiteral("audio-stream-unchanged"));
+                return;
+              }
+              QString operationError =
+                  receiptStatus == QStringLiteral("Refused")
+                      ? QStringLiteral("audio-stream-move-refused")
+                      : QStringLiteral("audio-stream-move-failed");
+              if (rollbackAttempted && rollbackVerified)
+                operationError = QStringLiteral("audio-stream-move-restored");
+              startInventoryLoad(QString(), operationError);
             });
         if (!applyStarted)
           failOperation(QStringLiteral("backend-unavailable"));

@@ -12,9 +12,21 @@ TestCase {
             property bool audioBusy: false
             property bool audioAvailable: true
             property string audioReason: ""
-            property var audioOutputs: [{ id: "output-0123456789abcdef", label: "Output", default: true, volumePercent: 40, muted: false }]
+            property var audioOutputs: [
+                { id: "output-0123456789abcdef", label: "Output", default: true, volumePercent: 40, muted: false },
+                { id: "output-fedcba9876543210", label: "Headset", default: false, volumePercent: 50, muted: false }
+            ]
             property var audioInputs: [{ id: "input-0123456789abcdef", label: "Input", default: true, volumePercent: 50, muted: false }]
-            property var audioStreams: []
+            property var audioStreams: [{
+                id: "playback-30",
+                label: "Game",
+                direction: "playback",
+                target: "output-0123456789abcdef",
+                volumePercent: 75,
+                muted: false,
+                processRuleAvailable: true,
+                moveAvailable: true
+            }]
             property var audioCards: []
             property var audioRouteRules: [{
                 id: "rule-0001",
@@ -39,6 +51,7 @@ TestCase {
             property int audioLoads: 0
             property int audioSets: 0
             property int processRules: 0
+            property int streamMoves: 0
             property int executableRules: 0
             property int directoryRules: 0
             property int confirmedProcessRules: 0
@@ -51,6 +64,10 @@ TestCase {
             function setAudioDefault(direction, device) {
                 audioSets++
                 lastCall = [direction, device]
+            }
+            function moveAudioStream(stream, originalDevice, requestedDevice) {
+                streamMoves++
+                lastCall = [stream, originalDevice, requestedDevice]
             }
             function chooseAudioProcessRule(direction, device) {
                 processRules++
@@ -110,20 +127,36 @@ TestCase {
         verify(section)
         compare(section.brokerStateText(), "Inactive")
         compare(section.brokerDetailText(), "Rules are stored; the new-stream Audio broker is not running.")
-        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
+        compare(section.existingStreamBoundaryText(), "Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
         backend.audioRouteBrokerActive = true
         backend.audioRouteBrokerReason = ""
         backend.audioRouteEnforcementAvailable = true
         compare(section.brokerStateText(), "Active")
         compare(section.brokerDetailText(), "Rules apply automatically to new streams.")
-        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
+        compare(section.existingStreamBoundaryText(), "Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
         backend.audioRouteBrokerAvailable = false
         backend.audioRouteBrokerActive = false
         backend.audioRouteBrokerReason = "invalid-response"
         backend.audioRouteEnforcementAvailable = false
         compare(section.brokerStateText(), "Unavailable")
         compare(section.brokerDetailText(), "Rules are stored; the Audio broker status was rejected safely.")
-        compare(section.existingStreamBoundaryText(), "Existing streams are not moved.")
+        compare(section.existingStreamBoundaryText(), "Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
+    }
+
+    function test_separatelyConfirmedSingleStreamMove() {
+        let backend = createTemporaryObject(fakeBackend, this)
+        let section = createTemporaryObject(audioComponent, this, { backend: backend })
+        verify(section)
+        section.requestStreamMove("playback-30", "playback", "output-0123456789abcdef")
+        compare(section.pendingMoveStream, "playback-30")
+        compare(section.pendingMoveDirection, "playback")
+        compare(section.pendingMoveOriginalDevice, "output-0123456789abcdef")
+        section.pendingMoveRequestedDevice = "output-fedcba9876543210"
+        verify(section.applyPendingStreamMove())
+        compare(backend.streamMoves, 1)
+        compare(backend.lastCall, ["playback-30", "output-0123456789abcdef", "output-fedcba9876543210"])
+        compare(section.pendingMoveStream, "")
+        compare(section.pendingMoveRequestedDevice, "")
     }
 
     function test_typedProcessExecutableAndDirectoryRules() {

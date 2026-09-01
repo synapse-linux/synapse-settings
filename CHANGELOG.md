@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0-alpha.1
+
+- Add a separate read-only `plan-stream-move` contract and explicitly
+  acknowledged `move-stream` transaction for exactly one active playback or
+  recording stream.
+- Bind the plan to an opaque cohort covering the stream index, process instance,
+  canonical executable, exact current endpoint, requested endpoint and raw
+  backend targets without exposing those private values.
+- Revalidate the stream and cohort twice before mutation and require the caller
+  to provide the exact original opaque endpoint.
+- Claim `Applied` only after fixed-argv success and fresh same-identity target
+  verification; otherwise return a typed `Refused` or `Failed` receipt.
+- Restore the exact original raw endpoint only when a failed backend call
+  nevertheless reached the requested endpoint and the same stream identity is
+  still provable, then verify that rollback.
+- Add a Qt confirmation dialog that selects one active stream and one typed
+  endpoint, states that no persistent rule is created, and keeps cohort and
+  acknowledgement details outside QML.
+- Add strict schemas, independent C++ decoding, playback and recording fixtures,
+  all typed preflight failures, stale-cohort and endpoint drift, timeout, stream
+  loss, identity loss, verification and rollback tests.
+- Refresh the complete typed presentation cohort after every apply outcome,
+  including uncertain transport or receipt-contract failures.
+- Keep the candidate source-only: no installation, service activation, live
+  stream movement, playback, capture or deployment is performed.
+
 ## 0.5.0-alpha.1
 
 - Add an owner-private, status-only AF_UNIX channel under

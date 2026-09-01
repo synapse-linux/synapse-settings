@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-existing-stream-move-plan-v1.schema.json",
+  "title": "Synapse Settings single existing-stream move plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "stream", "direction", "originalDevice", "requestedDevice", "cohort", "changed", "stateAuthority", "requiresAcknowledgement", "singleStream", "postflightRequired", "rollbackOnUnverified", "applied", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-existing-stream-move-plan/v1"},
+    "status": {"const": "Planned"},
+    "stream": {"type": "string", "pattern": "^(playback|recording)-(0|[1-9][0-9]{0,9})$", "maxLength": 31},
+    "direction": {"enum": ["output", "input"]},
+    "originalDevice": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$", "maxLength": 23},
+    "requestedDevice": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$", "maxLength": 23},
+    "cohort": {"type": "string", "pattern": "^move-[0-9a-f]{16}$", "maxLength": 21},
+    "changed": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-existing-stream-move/v1"},
+    "singleStream": {"const": true},
+    "postflightRequired": {"const": true},
+    "rollbackOnUnverified": {"const": true},
+    "applied": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"direction": {"const": "output"}}, "required": ["direction"]},
+      "then": {
+        "properties": {
+          "stream": {"pattern": "^playback-"},
+          "originalDevice": {"pattern": "^output-[0-9a-f]{16}$"},
+          "requestedDevice": {"pattern": "^output-[0-9a-f]{16}$"}
+        }
+      },
+      "else": {
+        "properties": {
+          "stream": {"pattern": "^recording-"},
+          "originalDevice": {"pattern": "^input-[0-9a-f]{16}$"},
+          "requestedDevice": {"pattern": "^input-[0-9a-f]{16}$"}
+        }
+      }
+    }
+  ]
+}

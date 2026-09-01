@@ -9,6 +9,8 @@ fields fail closed.
 | `synapse.settings.audio-inventory/v1` | Bounded outputs, inputs, streams and cards |
 | `synapse.settings.audio-default-plan/v1` | Read-only default-device plan |
 | `synapse.settings.audio-default-receipt/v1` | Verified default-device transaction |
+| `synapse.settings.audio-existing-stream-move-plan/v1` | Read-only plan bound to one active-stream cohort |
+| `synapse.settings.audio-existing-stream-move-receipt/v1` | Explicit one-stream move, postflight and rollback result |
 | `synapse.settings.audio-route-policy/v1` | Private canonical persisted policy |
 | `synapse.settings.audio-route-policy-view/v1` | Redacted presentation model |
 | `synapse.settings.audio-route-policy-receipt/v1` | Atomic policy mutation receipt |
@@ -16,7 +18,7 @@ fields fail closed.
 | `synapse.settings.audio-route-broker-status/v1` | Read-only capability or active new-stream broker status |
 | `synapse.settings.audio-route-broker-receipt/v1` | Verified per-new-stream enforcement result |
 
-The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 5
+The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 6
 still sets the former true and the latter false because a policy write never
 proves a broker move. The resolution contract returns one
 of `exact-executable`, `directory-prefix`, or `system-default` and separately
@@ -25,6 +27,16 @@ reports whether the selected endpoint is currently available.
 Opaque Audio IDs are scoped by direction (`output-…` or `input-…`). Stream IDs
 are bounded `playback-N` or `recording-N` tokens and must be unique within one
 inventory cohort. Raw backend node names are never public contract fields.
+
+The existing-stream plan fixes `status=Planned`, `singleStream=true`,
+`postflightRequired=true`, `rollbackOnUnverified=true`, `applied=false`, and the
+exact acknowledgement identifier. Its `move-…` value is an opaque bounded cohort
+binding the private stream index, process instance, executable and exact current
+and requested raw endpoints. The receipt is one of `Applied`, `AlreadyRouted`,
+`Refused`, or `Failed`; cross-field invariants prevent any refused or failed
+receipt from claiming `changed`, `moveApplied` or `verified`. A verified rollback
+requires `rollbackAttempted=true`. Every receipt fixes `policyApplied=false`,
+`persistentRuleCreated=false`, and `existingStreamMovement=true`.
 
 The broker status distinguishes source capability, process activity and actual
 enforcement availability. The broker serves the same contract for one fixed

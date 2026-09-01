@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schemas/settings/audio-existing-stream-move-receipt-v1.schema.json",
+  "title": "Synapse Settings single existing-stream move receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "reason", "stream", "direction", "originalDevice", "requestedDevice", "changed", "moveApplied", "verified", "rollbackAttempted", "rollbackVerified", "stateAuthority", "requiresAcknowledgement", "singleStream", "policyApplied", "persistentRuleCreated", "existingStreamMovement", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-existing-stream-move-receipt/v1"},
+    "status": {"enum": ["Applied", "AlreadyRouted", "Refused", "Failed"]},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["audio-unavailable", "stream-vanished", "process-unavailable", "target-unavailable", "current-target-unavailable", "original-target-mismatch", "stream-cohort-changed", "move-timeout", "move-failed", "verification-failed", "verification-unavailable", "stream-identity-changed"]}
+      ]
+    },
+    "stream": {"type": "string", "pattern": "^(playback|recording)-(0|[1-9][0-9]{0,9})$", "maxLength": 31},
+    "direction": {"enum": ["output", "input"]},
+    "originalDevice": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$", "maxLength": 23},
+    "requestedDevice": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$", "maxLength": 23},
+    "changed": {"type": "boolean"},
+    "moveApplied": {"type": "boolean"},
+    "verified": {"type": "boolean"},
+    "rollbackAttempted": {"type": "boolean"},
+    "rollbackVerified": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-existing-stream-move/v1"},
+    "singleStream": {"const": true},
+    "policyApplied": {"const": false},
+    "persistentRuleCreated": {"const": false},
+    "existingStreamMovement": {"const": true},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"direction": {"const": "output"}}, "required": ["direction"]},
+      "then": {
+        "properties": {
+          "stream": {"pattern": "^playback-"},
+          "originalDevice": {"pattern": "^output-[0-9a-f]{16}$"},
+          "requestedDevice": {"pattern": "^output-[0-9a-f]{16}$"}
+        }
+      },
+      "else": {
+        "properties": {
+          "stream": {"pattern": "^recording-"},
+          "originalDevice": {"pattern": "^input-[0-9a-f]{16}$"},
+          "requestedDevice": {"pattern": "^input-[0-9a-f]{16}$"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Applied"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": true},
+          "moveApplied": {"const": true},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "AlreadyRouted"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": false},
+          "moveApplied": {"const": false},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Refused"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"enum": ["audio-unavailable", "stream-vanished", "process-unavailable", "target-unavailable", "current-target-unavailable", "original-target-mismatch", "stream-cohort-changed", "stream-identity-changed"]},
+          "changed": {"const": false},
+          "moveApplied": {"const": false},
+          "verified": {"const": false},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Failed"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reason": {"enum": ["stream-vanished", "move-timeout", "move-failed", "verification-failed", "verification-unavailable", "stream-identity-changed"]},
+          "changed": {"const": false},
+          "moveApplied": {"const": false},
+          "verified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"rollbackVerified": {"const": true}}, "required": ["rollbackVerified"]},
+      "then": {"properties": {"rollbackAttempted": {"const": true}}}
+    },
+    {
+      "if": {"properties": {"rollbackAttempted": {"const": true}}, "required": ["rollbackAttempted"]},
+      "then": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "reason": {"enum": ["move-timeout", "move-failed"]}
+        }
+      }
+    }
+  ]
+}

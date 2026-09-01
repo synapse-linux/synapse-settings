@@ -48,6 +48,21 @@ Application policy mutations validate the exact receipt and then perform the
 same complete refresh. A failed mutation preserves the last accepted model and
 publishes only a deterministic error identifier.
 
+A GUI existing-stream transaction is independent:
+
+1. validate one published opaque stream, its exact current opaque endpoint and a
+   direction-compatible requested endpoint;
+2. request and independently validate a fresh read-only plan and opaque cohort;
+3. when changed, invoke the one-stream setter with the exact original endpoint,
+   cohort and adapter-owned acknowledgement;
+4. independently validate the exact `Applied`, `AlreadyRouted`, `Refused` or
+   `Failed` receipt and its postflight/rollback invariants;
+5. reload inventory, policy and broker status before reporting success, a typed
+   transaction error, or an uncertain apply transport/contract result.
+
+QML owns only the visible modal confirmation. It never receives the cohort,
+acknowledgement, process identity, backend index or raw endpoint.
+
 ## PipeWire-Pulse core adapter
 
 Production executes only absolute `/usr/bin/pactl` with fixed operation argv.
@@ -110,8 +125,29 @@ policy. It revalidates the exact contract and exposes booleans plus a bounded
 typed reason identifier. QML sees neither the socket path nor IPC frames and
 cannot query or control the broker directly.
 
-A receipt reports `routingApplied=true` only when the command succeeds and a
-fresh postflight proves the same process instance on the selected opaque target.
+## Explicit existing-stream transaction boundary
+
+Alpha 6 does not add reconciliation to the broker. The C11 CLI implements one
+separate read-only plan and one separately acknowledged apply operation for an
+exact opaque stream. The cohort binds the backend index, direction, PID plus
+start time, canonical executable, current opaque and raw endpoint, requested
+opaque and raw endpoint. Only the opaque cohort and opaque endpoint/stream IDs
+cross into the Qt adapter.
+
+Apply requires the exact original endpoint and repeats the complete preflight
+twice before a fixed `move-sink-input` or `move-source-output` call. A command
+success becomes `Applied` only after fresh same-instance/target verification. If
+a failed command nevertheless reached the requested target, one rollback to the
+exact original raw endpoint is permitted only while the same identity is still
+proven, followed by another verification. Stream disappearance, identity loss,
+inventory loss or an unexpected intervening target blocks rollback. The receipt
+explicitly denies policy application and persistent-rule creation.
+
+This path was exercised only with compile-time fixture overrides. It does not
+install or activate the broker and did not move a live stream.
+
+A broker receipt reports `routingApplied=true` only when the command succeeds and
+a fresh postflight proves the same process instance on the selected opaque target.
 A command that reports failure after reaching the target is compensated to the
 exact original endpoint when the same identity remains provable. Vanished or
 changed identities, unavailable targets, timeout and unverifiable state never
@@ -121,7 +157,8 @@ or subscriber text.
 The service unit restricts address families to AF_UNIX, requests a private
 runtime directory and applies user-service hardening, but installation,
 enablement, startup and live qualification remain separate gates.
-Existing-stream movement is absent. Policy view/receipt v1 still reports
+Existing-stream movement is never ambient and is available only through the
+explicit transaction above. Policy view/receipt v1 still reports
 `audio-route-broker-not-integrated` because a policy write cannot prove runtime
 activity or a stream move. The separate broker-status contract is the sole
 runtime authority presented by Settings.

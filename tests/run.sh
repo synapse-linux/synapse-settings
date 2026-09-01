@@ -90,7 +90,7 @@ assert [x['id'] for x in value['sections']]==['layers','audio','input','themes']
 assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections'])
 PY
 "$binary" sections --format text | grep -Fq $'audio\tAudio\taudio-card\tavailable'
-[[ $($binary --version) == 'synapse-settings 0.5.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 0.6.0-alpha.1' ]]
 "$binary" --help | grep -Fq 'synapse-settings audio policy set-rule'
 
 # Broker-status observation is independently read-only when no broker or policy
@@ -153,18 +153,88 @@ printf 'source.a\n' >"$audio/default-source"
 cat >"$work/bin/pactl-fake" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+move_stream() {
+  local file=$1 index=$2 field=$3 raw_target=$4
+  local mode=${SYNAPSE_AUDIO_MOVE_MODE:-success}
+  if [[ -n ${SYNAPSE_AUDIO_MOVE_LOG:-} ]]; then
+    printf '%s\t%s\t%s\n' "$field" "$index" "$raw_target" >>"$SYNAPSE_AUDIO_MOVE_LOG"
+  fi
+  case "$mode" in
+    fail) exit 65 ;;
+    timeout) exec 1>&-; sleep 5; exit 65 ;;
+    no-mutate-success) exit 0 ;;
+  esac
+  python - "$file" "$index" "$field" "$raw_target" <<'PY'
+import json,sys
+path,index,field,target=sys.argv[1],int(sys.argv[2]),sys.argv[3],sys.argv[4]
+raw_to_index={'sink.a':10,'sink.b':11,'source.a':20,'source.b':21}
+value=json.load(open(path))
+selected=[entry for entry in value if entry.get('index')==index]
+if len(selected)!=1 or target not in raw_to_index:
+    raise SystemExit(64)
+selected[0][field]=raw_to_index[target]
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  if [[ $mode == identity-change ]]; then
+    python - "$file" "$index" <<'PY'
+import json,sys
+path,index=sys.argv[1],int(sys.argv[2]);value=json.load(open(path))
+for entry in value:
+    if entry.get('index')==index:
+        entry.setdefault('properties',{})['application.process.id']='2147483647'
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  elif [[ $mode == vanish-after-move ]]; then
+    python - "$file" "$index" <<'PY'
+import json,sys
+path,index=sys.argv[1],int(sys.argv[2]);value=json.load(open(path))
+value=[entry for entry in value if entry.get('index')!=index]
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  elif [[ $mode == postflight-unavailable ]]; then
+    : >"$SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list"
+  elif [[ $mode == mutate-fail ]]; then
+    exit 65
+  fi
+}
+
 case "${1-} ${2-} ${3-}" in
   '--format=json info ')
     printf '{"default_sink_name":"%s","default_source_name":"%s"}\n' "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-sink")" "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-source")" ;;
   '--format=json list sinks') cat "$SYNAPSE_AUDIO_FIXTURES/sinks.json" ;;
   '--format=json list sources') cat "$SYNAPSE_AUDIO_FIXTURES/sources.json" ;;
-  '--format=json list sink-inputs') cat "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" ;;
-  '--format=json list source-outputs') cat "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" ;;
+  '--format=json list sink-inputs')
+    if [[ -e $SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list ]]; then
+      rm -f "$SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list"
+      exit 65
+    fi
+    if [[ ${SYNAPSE_AUDIO_MOVE_MODE:-} == change-before-second ]]; then
+      count=0
+      [[ ! -e $SYNAPSE_AUDIO_FIXTURES/stream-list-count ]] || read -r count <"$SYNAPSE_AUDIO_FIXTURES/stream-list-count"
+      count=$((count + 1))
+      printf '%s\n' "$count" >"$SYNAPSE_AUDIO_FIXTURES/stream-list-count"
+      if [[ $count == 2 ]]; then
+        sed 's/"sink":11/"sink":10/' "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" >"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next"
+        mv "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.next" "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json"
+      fi
+    fi
+    cat "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" ;;
+  '--format=json list source-outputs')
+    if [[ -e $SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list ]]; then
+      rm -f "$SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list"
+      exit 65
+    fi
+    cat "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" ;;
   '--format=json list cards') cat "$SYNAPSE_AUDIO_FIXTURES/cards.json" ;;
   'set-default-sink sink.b ')
     printf 'sink.b\n' >"$SYNAPSE_AUDIO_FIXTURES/default-sink" ;;
   'set-default-source source.b ')
     printf 'source.b\n' >"$SYNAPSE_AUDIO_FIXTURES/default-source" ;;
+  'move-sink-input '*)
+    move_stream "$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json" "$2" sink "$3" ;;
+  'move-source-output '*)
+    move_stream "$SYNAPSE_AUDIO_FIXTURES/source-outputs.json" "$2" source "$3" ;;
   *) exit 64 ;;
 esac
 EOF
@@ -276,12 +346,422 @@ for args in \
   [[ $status != 0 ]]
 done
 
-# Private deterministic per-executable and directory audio routing policy.
-read -r usb_input < <(python - "$work/audio-after.json" <<'PY'
+# Existing-stream movement is a separate, explicitly acknowledged one-stream
+# transaction. Planning is read-only and binds opaque stream/process/endpoint
+# identity; apply rechecks it twice, verifies the result, and only restores the
+# exact original raw endpoint while the same identity remains provable.
+read -r builtin_input usb_input < <(python - "$work/audio-after.json" <<'PY'
 import json,sys
-v=json.load(open(sys.argv[1]));print(v['inputs'][1]['id'])
+v=json.load(open(sys.argv[1]));print(v['inputs'][0]['id'],v['inputs'][1]['id'])
 PY
 )
+cp "$audio/sink-inputs.json" "$work/sink-inputs.base.json"
+restore_playback_stream() {
+  cp "$work/sink-inputs.base.json" "$audio/sink-inputs.json"
+  rm -f "$audio/fail-next-stream-list" "$audio/stream-list-count"
+}
+move_cohort() {
+  python - "$1" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['cohort'])
+PY
+}
+apply_stream_move() {
+  local output=$1
+  shift
+  "$@" >"$output"
+}
+
+before_plan=$(sha256sum "$audio/sink-inputs.json")
+"${AUDIO_ENV[@]}" "$binary" audio plan-stream-move --stream playback-30 \
+  --device "$integrated_output" --format json >"$work/stream-move-plan.json"
+after_plan=$(sha256sum "$audio/sink-inputs.json")
+[[ $before_plan == "$after_plan" ]]
+playback_cohort=$(move_cohort "$work/stream-move-plan.json")
+python - "$work/stream-move-plan.json" "$headset_output" "$integrated_output" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['schema']=='synapse.settings.audio-existing-stream-move-plan/v1'
+assert v['status']=='Planned' and v['stream']=='playback-30' and v['direction']=='output'
+assert v['originalDevice']==sys.argv[2] and v['requestedDevice']==sys.argv[3]
+assert v['cohort'].startswith('move-') and len(v['cohort'])==21 and v['changed']
+assert v['stateAuthority']=='pipewire-pulse-model'
+assert v['requiresAcknowledgement']=='synapse-settings/audio-existing-stream-move/v1'
+assert v['singleStream'] and v['postflightRequired'] and v['rollbackOnUnverified']
+assert not v['applied'] and v['bounded']
+PY
+
+: >"$work/stream-move.log"
+apply_stream_move "$work/stream-move-applied.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_LOG="$work/stream-move.log" \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$playback_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+python - "$work/stream-move-applied.json" "$headset_output" "$integrated_output" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[4]))
+assert v['schema']=='synapse.settings.audio-existing-stream-move-receipt/v1'
+assert v['status']=='Applied' and v['reason'] is None
+assert v['stream']=='playback-30' and v['direction']=='output'
+assert v['originalDevice']==sys.argv[2] and v['requestedDevice']==sys.argv[3]
+assert v['changed'] and v['moveApplied'] and v['verified']
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+assert v['singleStream'] and not v['policyApplied'] and not v['persistentRuleCreated']
+assert v['existingStreamMovement'] and v['bounded']
+assert state[0]['sink']==10
+PY
+[[ $(cat "$work/stream-move.log") == $'sink\t30\tsink.a' ]]
+
+# A same-target plan remains read-only and an explicitly submitted no-op is a
+# verified AlreadyRouted receipt, never a policy operation.
+"${AUDIO_ENV[@]}" "$binary" audio plan-stream-move --stream playback-30 \
+  --device "$integrated_output" --format json >"$work/stream-move-plan-same.json"
+same_cohort=$(move_cohort "$work/stream-move-plan-same.json")
+apply_stream_move "$work/stream-move-already.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$integrated_output" --device "$integrated_output" \
+  --cohort "$same_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+python - "$work/stream-move-plan-same.json" "$work/stream-move-already.json" <<'PY'
+import json,sys
+plan=json.load(open(sys.argv[1]));receipt=json.load(open(sys.argv[2]))
+assert not plan['changed'] and not plan['applied']
+assert receipt['status']=='AlreadyRouted' and receipt['reason'] is None
+assert not receipt['changed'] and not receipt['moveApplied'] and receipt['verified']
+assert not receipt['rollbackAttempted'] and not receipt['rollbackVerified']
+PY
+
+# Stale cohorts, mismatched original devices, and unavailable targets refuse
+# before mutation. The opaque cohort cannot be replaced by a raw endpoint.
+restore_playback_stream
+"${AUDIO_ENV[@]}" "$binary" audio plan-stream-move --stream playback-30 \
+  --device "$integrated_output" --format json >"$work/stream-move-plan-stale.json"
+stale_cohort=$(move_cohort "$work/stream-move-plan-stale.json")
+bad_cohort=move-0000000000000000
+[[ $bad_cohort != "$stale_cohort" ]] || bad_cohort=move-0000000000000001
+set +e
+apply_stream_move "$work/stream-move-stale.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$bad_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+stale_status=$?
+set -e
+[[ $stale_status == 1 ]]
+python - "$work/stream-move-stale.json" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[2]))
+assert v['status']=='Refused' and v['reason']=='stream-cohort-changed'
+assert not any(v[x] for x in ['changed','moveApplied','verified','rollbackAttempted','rollbackVerified'])
+assert state[0]['sink']==11
+PY
+set +e
+apply_stream_move "$work/stream-move-original-mismatch.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$integrated_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+mismatch_status=$?
+apply_stream_move "$work/stream-move-target-unavailable.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device output-0000000000000000 \
+  --cohort move-0000000000000000 \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+target_status=$?
+set -e
+[[ $mismatch_status == 1 && $target_status == 1 ]]
+python - "$work/stream-move-original-mismatch.json" "$work/stream-move-target-unavailable.json" <<'PY'
+import json,sys
+mismatch=json.load(open(sys.argv[1]));target=json.load(open(sys.argv[2]))
+assert mismatch['status']=='Refused' and mismatch['reason']=='original-target-mismatch'
+assert target['status']=='Refused' and target['reason']=='target-unavailable'
+assert not mismatch['moveApplied'] and not target['moveApplied']
+PY
+
+# A cohort change between the two apply preflights is refused before the fixed
+# move argv. The fixture changes inventory externally on the second read.
+restore_playback_stream
+: >"$work/stream-move-double-preflight.log"
+set +e
+apply_stream_move "$work/stream-move-double-preflight.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=change-before-second \
+  SYNAPSE_AUDIO_MOVE_LOG="$work/stream-move-double-preflight.log" \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+double_preflight_status=$?
+set -e
+[[ $double_preflight_status == 1 && ! -s $work/stream-move-double-preflight.log ]]
+python - "$work/stream-move-double-preflight.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Refused' and v['reason']=='stream-cohort-changed'
+assert not v['moveApplied'] and not v['rollbackAttempted']
+PY
+
+# Unsafe or unavailable preflight state is represented by typed refusal receipts
+# before a mutation command: provider loss, a vanished stream, an unavailable
+# process identity, and an unknown current endpoint are distinct.
+restore_playback_stream
+touch "$audio/fail-next-stream-list"
+set +e
+apply_stream_move "$work/stream-move-audio-unavailable.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+audio_unavailable_status=$?
+set -e
+[[ $audio_unavailable_status == 1 ]]
+
+printf '[]\n' >"$audio/sink-inputs.json"
+set +e
+apply_stream_move "$work/stream-move-vanished-preflight.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+vanished_preflight_status=$?
+set -e
+[[ $vanished_preflight_status == 1 ]]
+
+restore_playback_stream
+python - "$audio/sink-inputs.json" <<'PY'
+import json,sys
+path=sys.argv[1];value=json.load(open(path))
+value[0]['properties']['application.process.id']='2147483647'
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+set +e
+apply_stream_move "$work/stream-move-process-unavailable.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+process_unavailable_status=$?
+set -e
+[[ $process_unavailable_status == 1 ]]
+
+restore_playback_stream
+python - "$audio/sink-inputs.json" <<'PY'
+import json,sys
+path=sys.argv[1];value=json.load(open(path));value[0]['sink']=999
+open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+set +e
+apply_stream_move "$work/stream-move-current-unavailable.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$stale_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+current_unavailable_status=$?
+set -e
+[[ $current_unavailable_status == 1 ]]
+python - "$work/stream-move-audio-unavailable.json" \
+  "$work/stream-move-vanished-preflight.json" \
+  "$work/stream-move-process-unavailable.json" \
+  "$work/stream-move-current-unavailable.json" <<'PY'
+import json,sys
+expected=['audio-unavailable','stream-vanished','process-unavailable',
+          'current-target-unavailable']
+for path,reason in zip(sys.argv[1:],expected):
+ value=json.load(open(path))
+ assert value['status']=='Refused' and value['reason']==reason
+ assert not any(value[key] for key in
+                ['changed','moveApplied','verified','rollbackAttempted',
+                 'rollbackVerified'])
+PY
+
+# Backend failure without a target change needs no rollback.
+restore_playback_stream
+"${AUDIO_ENV[@]}" "$binary" audio plan-stream-move --stream playback-30 \
+  --device "$integrated_output" --format json >"$work/stream-move-plan-fail.json"
+fail_cohort=$(move_cohort "$work/stream-move-plan-fail.json")
+set +e
+apply_stream_move "$work/stream-move-failed.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=fail \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+failed_status=$?
+set -e
+[[ $failed_status == 1 ]]
+python - "$work/stream-move-failed.json" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[2]))
+assert v['status']=='Failed' and v['reason']=='move-failed'
+assert not v['changed'] and not v['moveApplied'] and not v['verified']
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+assert state[0]['sink']==11
+PY
+
+# A false backend success with no target change is verification failure, while
+# a backend failure that nonetheless moved is rolled back to the exact original
+# raw endpoint and verified under the same stream identity.
+restore_playback_stream
+set +e
+apply_stream_move "$work/stream-move-unverified.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=no-mutate-success \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+unverified_status=$?
+set -e
+[[ $unverified_status == 1 ]]
+python - "$work/stream-move-unverified.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Failed' and v['reason']=='verification-failed'
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+PY
+restore_playback_stream
+: >"$work/stream-move-rollback.log"
+set +e
+apply_stream_move "$work/stream-move-rollback.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=mutate-fail \
+  SYNAPSE_AUDIO_MOVE_LOG="$work/stream-move-rollback.log" \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+rollback_status=$?
+set -e
+[[ $rollback_status == 1 ]]
+python - "$work/stream-move-rollback.json" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[2]))
+assert v['status']=='Failed' and v['reason']=='move-failed'
+assert not v['changed'] and not v['moveApplied'] and not v['verified']
+assert v['rollbackAttempted'] and v['rollbackVerified']
+assert state[0]['sink']==11
+PY
+[[ $(cat "$work/stream-move-rollback.log") == $'sink\t30\tsink.a\nsink\t30\tsink.b' ]]
+
+# Identity or inventory loss after the backend call blocks unsafe rollback.
+restore_playback_stream
+set +e
+apply_stream_move "$work/stream-move-identity-changed.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=identity-change \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+identity_status=$?
+set -e
+[[ $identity_status == 1 ]]
+python - "$work/stream-move-identity-changed.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Failed' and v['reason']=='stream-identity-changed'
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+PY
+restore_playback_stream
+set +e
+apply_stream_move "$work/stream-move-vanished-postflight.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=vanish-after-move \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+vanished_postflight_status=$?
+set -e
+[[ $vanished_postflight_status == 1 ]]
+python - "$work/stream-move-vanished-postflight.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Failed' and v['reason']=='stream-vanished'
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+PY
+restore_playback_stream
+set +e
+apply_stream_move "$work/stream-move-verification-unavailable.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=postflight-unavailable \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+unavailable_status=$?
+set -e
+[[ $unavailable_status == 1 ]]
+python - "$work/stream-move-verification-unavailable.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Failed' and v['reason']=='verification-unavailable'
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+PY
+
+# Move execution is bounded even when the backend stalls.
+restore_playback_stream
+start=$(date +%s)
+set +e
+apply_stream_move "$work/stream-move-timeout.json" \
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_MODE=timeout \
+  "$binary" audio move-stream --stream playback-30 \
+  --from-device "$headset_output" --device "$integrated_output" \
+  --cohort "$fail_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+move_timeout_status=$?
+set -e
+elapsed=$(( $(date +%s) - start ))
+[[ $move_timeout_status == 1 ]]
+(( elapsed < 4 ))
+python - "$work/stream-move-timeout.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]))
+assert v['status']=='Failed' and v['reason']=='move-timeout'
+assert not v['rollbackAttempted'] and not v['rollbackVerified']
+PY
+
+# Input movement uses the separate source-output backend operation and the same
+# typed one-stream receipt contract.
+cat >"$audio/source-outputs.json" <<EOF
+[{"index":31,"source":21,"mute":false,"volume":{"mono":{"value":32768}},"properties":{"application.name":"PodMic","application.process.id":"$process_pid"}}]
+EOF
+"${AUDIO_ENV[@]}" "$binary" audio plan-stream-move --stream recording-31 \
+  --device "$builtin_input" --format json >"$work/input-stream-move-plan.json"
+input_cohort=$(move_cohort "$work/input-stream-move-plan.json")
+apply_stream_move "$work/input-stream-move-applied.json" \
+  "${AUDIO_ENV[@]}" "$binary" audio move-stream --stream recording-31 \
+  --from-device "$usb_input" --device "$builtin_input" \
+  --cohort "$input_cohort" \
+  --ack synapse-settings/audio-existing-stream-move/v1 --format json
+python - "$work/input-stream-move-applied.json" "$audio/source-outputs.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[2]))
+assert v['status']=='Applied' and v['direction']=='input' and v['stream']=='recording-31'
+assert v['changed'] and v['moveApplied'] and v['verified']
+assert state[0]['source']==20
+PY
+printf '[]\n' >"$audio/source-outputs.json"
+restore_playback_stream
+
+# Tokens, direction, cohort, and the exact acknowledgement are structural CLI
+# gates and fail before any pactl move invocation.
+: >"$work/stream-move-invalid.log"
+for args in \
+  "audio move-stream --stream playback-30 --from-device $headset_output --device $integrated_output --cohort $fail_cohort --ack wrong" \
+  "audio move-stream --stream playback-030 --from-device $headset_output --device $integrated_output --cohort $fail_cohort --ack synapse-settings/audio-existing-stream-move/v1" \
+  "audio move-stream --stream playback-2147483648 --from-device $headset_output --device $integrated_output --cohort $fail_cohort --ack synapse-settings/audio-existing-stream-move/v1" \
+  "audio move-stream --stream playback-30 --from-device $headset_output --device $usb_input --cohort $fail_cohort --ack synapse-settings/audio-existing-stream-move/v1" \
+  "audio move-stream --stream playback-30 --from-device $headset_output --device $integrated_output --cohort raw-sink --ack synapse-settings/audio-existing-stream-move/v1" \
+  "audio plan-stream-move --stream playback-30 --device $integrated_output --cohort $fail_cohort"; do
+  set +e
+  # Fixture vectors contain no glob metacharacters.
+  # shellcheck disable=SC2086
+  "${AUDIO_ENV[@]}" SYNAPSE_AUDIO_MOVE_LOG="$work/stream-move-invalid.log" \
+    "$binary" $args >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ $status == 2 ]]
+done
+[[ ! -s "$work/stream-move-invalid.log" ]]
+[[ ! -e "$work/config/synapse/audio-route-policy-v1.json" ]]
+
+# Private deterministic per-executable and directory audio routing policy.
 mkdir -p "$work/steam/library/special" "$work/steam2"
 for executable in \
   "$work/steam/library/game" \
@@ -483,6 +963,24 @@ pairs=[
  ('audio-route-broker-status-v1.schema.json','status-inactive.json'),
  ('audio-default-plan-v1.schema.json','audio-plan.json'),
  ('audio-default-receipt-v1.schema.json','audio-receipt.json'),
+ ('audio-existing-stream-move-plan-v1.schema.json','stream-move-plan.json'),
+ ('audio-existing-stream-move-plan-v1.schema.json','stream-move-plan-same.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-applied.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-already.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-stale.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-double-preflight.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-audio-unavailable.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-vanished-preflight.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-process-unavailable.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-current-unavailable.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-failed.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-unverified.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-rollback.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-identity-changed.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-vanished-postflight.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-verification-unavailable.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','stream-move-timeout.json'),
+ ('audio-existing-stream-move-receipt-v1.schema.json','input-stream-move-applied.json'),
  ('audio-route-policy-view-v1.schema.json','route-view.json'),
  ('audio-route-policy-receipt-v1.schema.json','route-set-1.json'),
  ('audio-route-policy-receipt-v1.schema.json','route-set-process.json'),

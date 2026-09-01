@@ -12,6 +12,10 @@ Item {
     property string pendingDirection: ""
     property string pendingDevice: ""
     property string selectedProcessStream: ""
+    property string pendingMoveStream: ""
+    property string pendingMoveDirection: ""
+    property string pendingMoveOriginalDevice: ""
+    property string pendingMoveRequestedDevice: ""
     readonly property var outputs: backend ? backend.audioOutputs || [] : []
     readonly property var inputs: backend ? backend.audioInputs || [] : []
     readonly property var streams: backend ? backend.audioStreams || [] : []
@@ -45,6 +49,38 @@ Item {
         return true
     }
 
+    function endpointLabel(device) {
+        const items = device.indexOf("output-") === 0 ? outputs : inputs
+        for (let index = 0; index < items.length; ++index) {
+            if (items[index].id === device)
+                return items[index].label
+        }
+        return qsTr("Unavailable device")
+    }
+
+    function requestStreamMove(stream, direction, originalDevice) {
+        pendingMoveStream = stream
+        pendingMoveDirection = direction
+        pendingMoveOriginalDevice = originalDevice
+        pendingMoveRequestedDevice = ""
+        confirmStreamMove.open()
+    }
+
+    function clearPendingStreamMove() {
+        pendingMoveStream = ""
+        pendingMoveDirection = ""
+        pendingMoveOriginalDevice = ""
+        pendingMoveRequestedDevice = ""
+    }
+
+    function applyPendingStreamMove() {
+        if (pendingMoveStream === "" || pendingMoveOriginalDevice === "" || pendingMoveRequestedDevice === "" || !backend)
+            return false
+        backend.moveAudioStream(pendingMoveStream, pendingMoveOriginalDevice, pendingMoveRequestedDevice)
+        clearPendingStreamMove()
+        return true
+    }
+
     function chooseProcessRule(direction, device) {
         if (backend)
             backend.chooseAudioProcessRule(direction, device)
@@ -70,6 +106,8 @@ Item {
         case "audio-loaded": return qsTr("Audio devices updated.")
         case "audio-default-applied": return qsTr("Default Audio device changed and verified.")
         case "audio-default-unchanged": return qsTr("The selected device was already the default.")
+        case "audio-stream-moved": return qsTr("The active Audio stream moved and was verified.")
+        case "audio-stream-unchanged": return qsTr("The active Audio stream was already on that device.")
         case "audio-route-rule-saved": return qsTr("Application Audio rule saved.")
         case "audio-route-rule-unchanged": return qsTr("The Application Audio rule was already present.")
         case "audio-route-rule-removed": return qsTr("Application Audio rule removed.")
@@ -98,7 +136,7 @@ Item {
     }
 
     function existingStreamBoundaryText() {
-        return qsTr("Existing streams are not moved.")
+        return qsTr("Automatic rules never move existing streams. A stream moves only after separate confirmation, one at a time.")
     }
 
     function errorText(errorId) {
@@ -116,6 +154,10 @@ Item {
         case "route-policy-failed":
         case "broker-status-unavailable":
         case "policy-unavailable": return qsTr("The Audio operation failed safely.")
+        case "audio-stream-plan-failed": return qsTr("The active stream could not be planned safely.")
+        case "audio-stream-move-refused": return qsTr("The stream state changed or became unavailable. Nothing was moved.")
+        case "audio-stream-move-restored": return qsTr("The move failed; the exact original device was restored and verified.")
+        case "audio-stream-move-failed": return qsTr("The stream move could not be verified safely.")
         case "output-too-large":
         case "process-crashed": return qsTr("The Audio backend response was rejected.")
         default: return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
@@ -143,6 +185,54 @@ Item {
         onRejected: {
             root.pendingDirection = ""
             root.pendingDevice = ""
+        }
+    }
+
+    Dialog {
+        id: confirmStreamMove
+        title: qsTr("Move this active stream")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(Math.max(root.width - 40, 320), 560)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            streamMoveDevice.currentIndex = -1
+            const button = standardButton(Dialog.Ok)
+            if (button) {
+                button.text = qsTr("Move stream")
+                button.enabled = false
+            }
+        }
+        onAccepted: root.applyPendingStreamMove()
+        onRejected: root.clearPendingStreamMove()
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Only this active stream will move. No routing rule will be saved.")
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("If verification fails, Synapse restores the exact original device only while it can prove the same stream identity.")
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
+            ComboBox {
+                id: streamMoveDevice
+                Layout.fillWidth: true
+                model: root.pendingMoveDirection === "playback" ? root.outputs : root.inputs
+                textRole: "label"
+                valueRole: "id"
+                displayText: currentIndex < 0 ? qsTr("Choose a device") : currentText
+                onActivated: {
+                    root.pendingMoveRequestedDevice = currentValue || ""
+                    const button = confirmStreamMove.standardButton(Dialog.Ok)
+                    if (button)
+                        button.enabled = root.pendingMoveRequestedDevice !== "" && root.pendingMoveRequestedDevice !== root.pendingMoveOriginalDevice
+                }
+            }
         }
     }
 
@@ -362,7 +452,17 @@ Item {
                             anchors.fill: parent
                             Label { Layout.fillWidth: true; text: streamRow.modelData.label; elide: Text.ElideRight }
                             Label { text: streamRow.modelData.direction === "playback" ? qsTr("Playback") : qsTr("Recording") }
+                            Label {
+                                Layout.maximumWidth: 180
+                                text: root.endpointLabel(streamRow.modelData.target)
+                                elide: Text.ElideRight
+                            }
                             Label { text: streamRow.modelData.volumePercent + "%" }
+                            Button {
+                                text: qsTr("Move…")
+                                enabled: streamRow.modelData.moveAvailable && !root.backend.audioBusy
+                                onClicked: root.requestStreamMove(streamRow.modelData.id, streamRow.modelData.direction, streamRow.modelData.target)
+                            }
                         }
                     }
                 }

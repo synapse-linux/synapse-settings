@@ -144,7 +144,7 @@ PY
   --ack synapse-settings/audio-route-policy/v1 --format json >"$work/rule-directory.json"
 
 "${BASE_ENV[@]}" "$broker" --probe --format json >"$work/probe.json"
-[[ $("$broker" --version) == 'synapse-audio-route-broker 0.5.0-alpha.1' ]]
+[[ $("$broker" --version) == 'synapse-audio-route-broker 0.6.0-alpha.1' ]]
 python3 - "$work/probe.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]));assert v['schema']=='synapse.settings.audio-route-broker-status/v1'

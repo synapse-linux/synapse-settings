@@ -18,6 +18,7 @@ It implements these fixed operations:
 
 - `loadAudio()`;
 - `setAudioDefault(direction, deviceId)`;
+- `moveAudioStream(streamId, originalDeviceId, requestedDeviceId)`;
 - `chooseAudioProcessRule(direction, deviceId)`;
 - `confirmAudioProcessRule(streamId)` and `cancelAudioProcessRule()`;
 - `chooseAudioExecutableRule(direction, deviceId)`;
@@ -32,7 +33,11 @@ to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
 and republishes only a complete inventory-plus-policy-plus-broker-status cohort.
-Policy persistence still does not imply stream movement. The separate C11 broker
+For an existing active stream it separately validates the original endpoint,
+requests a fresh opaque cohort, supplies the core-owned exact acknowledgement,
+and independently validates the one-stream receipt. QML only opens the explicit
+confirmation and chooses a typed endpoint; it never receives the cohort or
+acknowledgement. Policy persistence still does not imply stream movement. The separate C11 broker
 owns new-stream observation and enforcement. The adapter obtains only typed,
 read-only runtime status through the C11 CLI; QML maps it to Active, Inactive or
 Unavailable presentation and cannot start, stop or configure the service.

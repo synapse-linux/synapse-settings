@@ -65,6 +65,38 @@ reason identifier. QML maps those typed values to presentation text and receives
 no PID, executable path, raw endpoint, socket path, IPC frame, argv, environment
 or acknowledgement.
 
+## Alpha 6 explicitly confirmed existing-stream move
+
+Existing-stream movement is not a broker reconciliation mode and is not a policy
+operation. `audio plan-stream-move` accepts one opaque `playback-N` or
+`recording-N` token and one direction-compatible endpoint token. It reloads the
+same-UID process identity, process start time, canonical executable, backend
+stream index, exact current raw endpoint and requested raw endpoint. It exposes
+only the opaque stream ID, opaque original/requested endpoint IDs and a bounded
+`move-…` cohort token.
+
+A changed plan can be applied only by `audio move-stream` with the same stream,
+exact original endpoint, requested endpoint, cohort and the exact acknowledgement
+`synapse-settings/audio-existing-stream-move/v1`. C11 repeats preflight twice and
+fails closed if the process, stream, current endpoint, requested endpoint or raw
+endpoint cohort changed. It executes one fixed `move-sink-input` or
+`move-source-output` argv and reports `Applied` only when a fresh postflight
+proves command success, the same process instance and the requested endpoint.
+
+If a backend command reports failure but postflight proves that the same stream
+reached the requested endpoint, C11 attempts one rollback to the exact original
+raw endpoint captured by the accepted cohort and verifies it. It does not roll
+back after process identity loss, stream loss, inventory loss or an intervening
+unexpected target. Receipts always state `policyApplied=false` and
+`persistentRuleCreated=false`.
+
+The Qt adapter independently validates both exact contracts, owns the cohort and
+acknowledgement, serializes the transaction, and refreshes the complete
+inventory/policy/broker-status cohort after every apply outcome, including an
+uncertain transport or contract failure. QML presents a separate modal
+confirmation for one stream and receives only typed stream and endpoint tokens.
+It cannot construct the plan, acknowledgement, cohort or backend command.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -89,7 +121,7 @@ output rules for the same application.
 
 ## Enforcement status
 
-Alpha 5 integrates the fixture-qualified broker's typed runtime state into the
+Alpha 6 preserves the fixture-qualified broker's typed runtime state in the
 standalone Settings candidate without installing or activating the service.
 Policy view, policy receipt and resolution v1 continue to report
 `audio-route-broker-not-integrated` and `enforcementAvailable=false` because a
@@ -98,10 +130,11 @@ private policy was atomically stored and still reports `routingApplied=false`.
 The separate broker-status contract is authoritative for current activity and
 new-stream enforcement availability.
 
-Only a separate broker event receipt can report a move, and only after verified
-postflight. Existing-stream migration remains unavailable and requires a future
-independent acknowledgement and rollback contract. QML never subscribes to
-PipeWire, opens the runtime socket or constructs raw `pactl` operations.
+A broker event receipt can report only a verified post-baseline new-stream move.
+A separate existing-stream receipt can report only the explicitly acknowledged
+single-stream transaction described above. Neither receipt implies the other,
+and neither a policy write nor broker status proves a move. QML never subscribes
+to PipeWire, opens the runtime socket or constructs raw `pactl` operations.
 
 ## Remaining Audio work
 

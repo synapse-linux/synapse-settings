@@ -31,6 +31,7 @@
 #define AUDIO_CARD_LIMIT 32U
 #define AUDIO_LABEL_LIMIT 255U
 #define AUDIO_ACK "synapse-settings/audio-default/v1"
+#define AUDIO_STREAM_MOVE_ACK "synapse-settings/audio-existing-stream-move/v1"
 
 typedef struct {
   char raw_name[SETTINGS_FIELD_LIMIT + 1U];
@@ -86,8 +87,14 @@ typedef struct {
 static const char *pactl_binary(void) {
 #ifdef SYNAPSE_SETTINGS_TEST_HOOKS
   const char *override = getenv("SYNAPSE_PACTL");
-  if (override && *override)
-    return override;
+  if (override && *override) {
+    static char test_path[PATH_MAX];
+    size_t length = strnlen(override, sizeof(test_path));
+    if (length >= sizeof(test_path))
+      return "";
+    memcpy(test_path, override, length + 1U);
+    return test_path;
+  }
 #endif
   return "/usr/bin/pactl";
 }
@@ -96,6 +103,11 @@ static void audio_usage(FILE *out) {
   fputs("Usage:\n"
         "  synapse-settings audio inventory [--format text|json]\n"
         "  synapse-settings audio broker-status [--format text|json]\n"
+        "  synapse-settings audio plan-stream-move --stream ID --device ID "
+        "[--format text|json]\n"
+        "  synapse-settings audio move-stream --stream ID --from-device ID "
+        "--device ID --cohort ID --ack " AUDIO_STREAM_MOVE_ACK " "
+        "[--format text|json]\n"
         "  synapse-settings audio plan-default --direction output|input "
         "--device ID [--format text|json]\n"
         "  synapse-settings audio set-default --direction output|input "
@@ -351,13 +363,24 @@ static json_object *pactl_json(const char *pactl, const char *first,
   return value;
 }
 
+static void audio_fnv1a64_update(uint64_t *hash, const void *data,
+                                 size_t size) {
+  const unsigned char *bytes = data;
+  for (size_t index = 0; index < size; index++) {
+    *hash ^= bytes[index];
+    *hash *= UINT64_C(1099511628211);
+  }
+}
+
+static void audio_fnv1a64_field(uint64_t *hash, const char *text) {
+  static const unsigned char separator = 0;
+  audio_fnv1a64_update(hash, text, strlen(text));
+  audio_fnv1a64_update(hash, &separator, sizeof(separator));
+}
+
 static uint64_t audio_fnv1a64(const char *text) {
   uint64_t hash = UINT64_C(14695981039346656037);
-  for (const unsigned char *cursor = (const unsigned char *)text; *cursor;
-       cursor++) {
-    hash ^= *cursor;
-    hash *= UINT64_C(1099511628211);
-  }
+  audio_fnv1a64_update(&hash, text, strlen(text));
   return hash;
 }
 
@@ -1077,9 +1100,50 @@ typedef struct {
   int requested_available;
 } audio_broker_stream_state;
 
+static int stream_move_cohort(const audio_broker_stream_state *state,
+                              const char *requested_device, char *cohort,
+                              size_t cohort_size) {
+  if (!state || !requested_device || !cohort || !cohort_size) {
+    errno = EINVAL;
+    return -1;
+  }
+  uint64_t hash = UINT64_C(14695981039346656037);
+  audio_fnv1a64_field(&hash,
+                      "synapse.settings.audio-existing-stream-move-cohort/v1");
+  audio_fnv1a64_field(&hash, state->stream);
+  audio_fnv1a64_field(&hash, state->direction);
+  audio_fnv1a64_field(&hash, state->executable);
+  audio_fnv1a64_field(&hash, state->current_device);
+  audio_fnv1a64_field(&hash, state->current_raw);
+  audio_fnv1a64_field(&hash, requested_device);
+  audio_fnv1a64_field(&hash, state->requested_raw);
+  char number[32];
+  int written =
+      snprintf(number, sizeof(number), "%ld", (long)state->process_pid);
+  if (written < 0 || (size_t)written >= sizeof(number))
+    return -1;
+  audio_fnv1a64_field(&hash, number);
+  written =
+      snprintf(number, sizeof(number), "%" PRIu64, state->process_start_time);
+  if (written < 0 || (size_t)written >= sizeof(number))
+    return -1;
+  audio_fnv1a64_field(&hash, number);
+  written = snprintf(number, sizeof(number), "%d", state->backend_index);
+  if (written < 0 || (size_t)written >= sizeof(number))
+    return -1;
+  audio_fnv1a64_field(&hash, number);
+  written = snprintf(cohort, cohort_size, "move-%016" PRIx64, hash);
+  if (written < 0 || (size_t)written >= cohort_size) {
+    errno = E2BIG;
+    return -1;
+  }
+  return 0;
+}
+
 static int parse_broker_stream_token(const char *stream_id, char *direction,
                                      size_t direction_size, int *index) {
-  if (!stream_id || !direction || !direction_size || !index)
+  if (!stream_id || !direction || !direction_size || !index ||
+      strlen(stream_id) > 31U)
     return -1;
   const char *digits = NULL;
   const char *mapped_direction = NULL;
@@ -1364,6 +1428,411 @@ int settings_audio_broker_apply_new(const char *stream_id,
   return 0;
 }
 
+typedef struct {
+  char status[24];
+  char reason[48];
+  char stream[32];
+  char direction[8];
+  char original_device[32];
+  char requested_device[32];
+  int changed;
+  int move_applied;
+  int verified;
+  int rollback_attempted;
+  int rollback_verified;
+} audio_stream_move_receipt;
+
+static int endpoint_token_shape(const char *direction, const char *device) {
+  if (!direction || !device)
+    return 0;
+  const char *prefix = strcmp(direction, "output") == 0  ? "output-"
+                       : strcmp(direction, "input") == 0 ? "input-"
+                                                         : NULL;
+  if (!prefix)
+    return 0;
+  size_t prefix_length = strlen(prefix);
+  if (strncmp(device, prefix, prefix_length) != 0 ||
+      strlen(device + prefix_length) != 16U)
+    return 0;
+  for (const char *cursor = device + prefix_length; *cursor; cursor++)
+    if (!((*cursor >= '0' && *cursor <= '9') ||
+          (*cursor >= 'a' && *cursor <= 'f')))
+      return 0;
+  return 1;
+}
+
+static int stream_move_cohort_shape(const char *cohort) {
+  if (!cohort || strncmp(cohort, "move-", 5U) != 0 ||
+      strlen(cohort + 5U) != 16U)
+    return 0;
+  for (const char *cursor = cohort + 5U; *cursor; cursor++)
+    if (!((*cursor >= '0' && *cursor <= '9') ||
+          (*cursor >= 'a' && *cursor <= 'f')))
+      return 0;
+  return 1;
+}
+
+static void stream_move_receipt_status(audio_stream_move_receipt *receipt,
+                                       const char *status, const char *reason) {
+  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
+                     reason ? reason : "");
+}
+
+static int initialize_stream_move_receipt(audio_stream_move_receipt *receipt,
+                                          const char *stream_id,
+                                          const char *original_device,
+                                          const char *requested_device) {
+  memset(receipt, 0, sizeof(*receipt));
+  int index = -1;
+  if (parse_broker_stream_token(stream_id, receipt->direction,
+                                sizeof(receipt->direction), &index) != 0 ||
+      copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) != 0 ||
+      copy_bounded(receipt->original_device, sizeof(receipt->original_device),
+                   original_device) != 0 ||
+      copy_bounded(receipt->requested_device, sizeof(receipt->requested_device),
+                   requested_device) != 0)
+    return -1;
+  (void)index;
+  return 0;
+}
+
+static void print_stream_move_plan(const audio_broker_stream_state *state,
+                                   const char *requested_device,
+                                   const char *cohort, int json) {
+  int changed = strcmp(state->current_device, requested_device) != 0;
+  if (!json) {
+    printf("Plan existing stream %s: %s -> %s%s\n", state->stream,
+           state->current_device, requested_device,
+           changed ? "" : " already selected");
+    return;
+  }
+  json_object *root = json_object_new_object();
+  json_object_object_add(
+      root, "schema",
+      json_object_new_string(
+          "synapse.settings.audio-existing-stream-move-plan/v1"));
+  json_object_object_add(root, "status", json_object_new_string("Planned"));
+  json_object_object_add(root, "stream", json_object_new_string(state->stream));
+  json_object_object_add(root, "direction",
+                         json_object_new_string(state->direction));
+  json_object_object_add(root, "originalDevice",
+                         json_object_new_string(state->current_device));
+  json_object_object_add(root, "requestedDevice",
+                         json_object_new_string(requested_device));
+  json_object_object_add(root, "cohort", json_object_new_string(cohort));
+  json_object_object_add(root, "changed", json_object_new_boolean(changed));
+  json_object_object_add(root, "stateAuthority",
+                         json_object_new_string("pipewire-pulse-model"));
+  json_object_object_add(root, "requiresAcknowledgement",
+                         json_object_new_string(AUDIO_STREAM_MOVE_ACK));
+  json_object_object_add(root, "singleStream", json_object_new_boolean(1));
+  json_object_object_add(root, "postflightRequired",
+                         json_object_new_boolean(1));
+  json_object_object_add(root, "rollbackOnUnverified",
+                         json_object_new_boolean(1));
+  json_object_object_add(root, "applied", json_object_new_boolean(0));
+  json_object_object_add(root, "bounded", json_object_new_boolean(1));
+  puts(json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+  json_object_put(root);
+}
+
+static void print_stream_move_receipt(const audio_stream_move_receipt *receipt,
+                                      int json) {
+  if (!json) {
+    printf("Existing stream move %s: %s", receipt->stream, receipt->status);
+    if (receipt->reason[0])
+      printf(" (%s)", receipt->reason);
+    fputc('\n', stdout);
+    return;
+  }
+  json_object *root = json_object_new_object();
+  json_object_object_add(
+      root, "schema",
+      json_object_new_string(
+          "synapse.settings.audio-existing-stream-move-receipt/v1"));
+  json_object_object_add(root, "status",
+                         json_object_new_string(receipt->status));
+  if (receipt->reason[0])
+    json_object_object_add(root, "reason",
+                           json_object_new_string(receipt->reason));
+  else
+    json_object_object_add(root, "reason", NULL);
+  json_object_object_add(root, "stream",
+                         json_object_new_string(receipt->stream));
+  json_object_object_add(root, "direction",
+                         json_object_new_string(receipt->direction));
+  json_object_object_add(root, "originalDevice",
+                         json_object_new_string(receipt->original_device));
+  json_object_object_add(root, "requestedDevice",
+                         json_object_new_string(receipt->requested_device));
+  json_object_object_add(root, "changed",
+                         json_object_new_boolean(receipt->changed));
+  json_object_object_add(root, "moveApplied",
+                         json_object_new_boolean(receipt->move_applied));
+  json_object_object_add(root, "verified",
+                         json_object_new_boolean(receipt->verified));
+  json_object_object_add(root, "rollbackAttempted",
+                         json_object_new_boolean(receipt->rollback_attempted));
+  json_object_object_add(root, "rollbackVerified",
+                         json_object_new_boolean(receipt->rollback_verified));
+  json_object_object_add(root, "stateAuthority",
+                         json_object_new_string("pipewire-pulse-model"));
+  json_object_object_add(root, "requiresAcknowledgement",
+                         json_object_new_string(AUDIO_STREAM_MOVE_ACK));
+  json_object_object_add(root, "singleStream", json_object_new_boolean(1));
+  json_object_object_add(root, "policyApplied", json_object_new_boolean(0));
+  json_object_object_add(root, "persistentRuleCreated",
+                         json_object_new_boolean(0));
+  json_object_object_add(root, "existingStreamMovement",
+                         json_object_new_boolean(1));
+  json_object_object_add(root, "bounded", json_object_new_boolean(1));
+  puts(json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+  json_object_put(root);
+}
+
+static const char *stream_move_preflight_reason(int loaded,
+                                                const char *reason) {
+  if (loaded == 1 && reason && strcmp(reason, "stream-vanished") == 0)
+    return "stream-vanished";
+  if (loaded == 1 && reason && strcmp(reason, "stream-identity-changed") == 0)
+    return "stream-identity-changed";
+  if (loaded == 2 && reason && strcmp(reason, "process-unavailable") == 0)
+    return "process-unavailable";
+  return "audio-unavailable";
+}
+
+static void apply_existing_stream_move(const char *stream_id,
+                                       const char *original_device,
+                                       const char *requested_device,
+                                       const char *expected_cohort,
+                                       audio_stream_move_receipt *receipt) {
+  audio_broker_stream_state first;
+  const char *reason = NULL;
+  int loaded =
+      load_broker_stream_state(stream_id, requested_device, &first, &reason);
+  if (loaded != 0) {
+    stream_move_receipt_status(receipt, "Refused",
+                               stream_move_preflight_reason(loaded, reason));
+    return;
+  }
+  if (!first.current_raw[0] || !first.current_device[0]) {
+    stream_move_receipt_status(receipt, "Refused",
+                               "current-target-unavailable");
+    return;
+  }
+  if (strcmp(first.current_device, original_device) != 0) {
+    stream_move_receipt_status(receipt, "Refused", "original-target-mismatch");
+    return;
+  }
+  if (!first.requested_available) {
+    stream_move_receipt_status(receipt, "Refused", "target-unavailable");
+    return;
+  }
+  char first_cohort[32];
+  if (stream_move_cohort(&first, requested_device, first_cohort,
+                         sizeof(first_cohort)) != 0 ||
+      strcmp(first_cohort, expected_cohort) != 0) {
+    stream_move_receipt_status(receipt, "Refused", "stream-cohort-changed");
+    return;
+  }
+
+  audio_broker_stream_state planned;
+  loaded =
+      load_broker_stream_state(stream_id, requested_device, &planned, &reason);
+  if (loaded != 0) {
+    stream_move_receipt_status(receipt, "Refused",
+                               stream_move_preflight_reason(loaded, reason));
+    return;
+  }
+  char planned_cohort[32];
+  if (!broker_identity_equal(&first, &planned) ||
+      strcmp(planned.current_device, original_device) != 0 ||
+      !planned.requested_available ||
+      stream_move_cohort(&planned, requested_device, planned_cohort,
+                         sizeof(planned_cohort)) != 0 ||
+      strcmp(planned_cohort, expected_cohort) != 0) {
+    stream_move_receipt_status(receipt, "Refused", "stream-cohort-changed");
+    return;
+  }
+  if (strcmp(original_device, requested_device) == 0) {
+    receipt->verified = 1;
+    stream_move_receipt_status(receipt, "AlreadyRouted", NULL);
+    return;
+  }
+
+  int move_timed_out = 0;
+  int moved = execute_broker_move(&planned, planned.requested_raw,
+                                  &move_timed_out) == 0;
+  audio_broker_stream_state after;
+  int after_status =
+      load_broker_stream_state(stream_id, requested_device, &after, &reason);
+  int same_identity =
+      after_status == 0 && broker_identity_equal(&planned, &after);
+  int at_requested =
+      same_identity && strcmp(after.current_device, requested_device) == 0;
+  if (moved && at_requested) {
+    receipt->changed = 1;
+    receipt->move_applied = 1;
+    receipt->verified = 1;
+    stream_move_receipt_status(receipt, "Applied", NULL);
+    return;
+  }
+
+  if (same_identity && at_requested) {
+    receipt->rollback_attempted = 1;
+    int rollback_timed_out = 0;
+    (void)execute_broker_move(&after, planned.current_raw, &rollback_timed_out);
+    (void)rollback_timed_out;
+    audio_broker_stream_state restored;
+    const char *restore_reason = NULL;
+    if (load_broker_stream_state(stream_id, NULL, &restored, &restore_reason) ==
+            0 &&
+        broker_identity_equal(&planned, &restored) &&
+        strcmp(restored.current_device, original_device) == 0)
+      receipt->rollback_verified = 1;
+  }
+
+  if (after_status == 1 && reason && strcmp(reason, "stream-vanished") == 0)
+    stream_move_receipt_status(receipt, "Failed", "stream-vanished");
+  else if (after_status == 2 || (after_status == 0 && !same_identity))
+    stream_move_receipt_status(receipt, "Failed", "stream-identity-changed");
+  else if (after_status != 0)
+    stream_move_receipt_status(receipt, "Failed", "verification-unavailable");
+  else if (move_timed_out)
+    stream_move_receipt_status(receipt, "Failed", "move-timeout");
+  else if (!moved)
+    stream_move_receipt_status(receipt, "Failed", "move-failed");
+  else
+    stream_move_receipt_status(receipt, "Failed", "verification-failed");
+}
+
+static int parse_stream_move_options(int argc, char **argv, int apply,
+                                     const char **stream,
+                                     const char **original_device,
+                                     const char **requested_device,
+                                     const char **cohort, const char **ack,
+                                     const char **format) {
+  *stream = NULL;
+  *original_device = NULL;
+  *requested_device = NULL;
+  *cohort = NULL;
+  *ack = NULL;
+  *format = "text";
+  int seen_format = 0;
+  for (int index = 2; index < argc; index++) {
+    const char **target = NULL;
+    if (strcmp(argv[index], "--stream") == 0)
+      target = stream;
+    else if (strcmp(argv[index], "--from-device") == 0)
+      target = original_device;
+    else if (strcmp(argv[index], "--device") == 0)
+      target = requested_device;
+    else if (strcmp(argv[index], "--cohort") == 0)
+      target = cohort;
+    else if (strcmp(argv[index], "--ack") == 0)
+      target = ack;
+    else if (strcmp(argv[index], "--format") == 0 && !seen_format) {
+      if (++index >= argc)
+        return -1;
+      *format = argv[index];
+      seen_format = 1;
+      continue;
+    } else if (strcmp(argv[index], "--json") == 0 && !seen_format) {
+      *format = "json";
+      seen_format = 1;
+      continue;
+    } else {
+      return -1;
+    }
+    if (++index >= argc || *target)
+      return -1;
+    *target = argv[index];
+  }
+  if (!*stream || !*requested_device ||
+      (strcmp(*format, "text") != 0 && strcmp(*format, "json") != 0))
+    return -1;
+  if (!apply && (*original_device || *cohort || *ack))
+    return -1;
+  if (apply && (!*original_device || !*cohort || !*ack))
+    return -1;
+  return 0;
+}
+
+static int settings_audio_stream_move_command(int argc, char **argv) {
+  int apply = strcmp(argv[1], "move-stream") == 0;
+  const char *stream = NULL;
+  const char *original_device = NULL;
+  const char *requested_device = NULL;
+  const char *cohort = NULL;
+  const char *ack = NULL;
+  const char *format = NULL;
+  if (parse_stream_move_options(argc, argv, apply, &stream, &original_device,
+                                &requested_device, &cohort, &ack,
+                                &format) != 0) {
+    audio_usage(stderr);
+    return 2;
+  }
+  char direction[8];
+  int backend_index = -1;
+  if (parse_broker_stream_token(stream, direction, sizeof(direction),
+                                &backend_index) != 0 ||
+      !endpoint_token_shape(direction, requested_device) ||
+      (apply && (!endpoint_token_shape(direction, original_device) ||
+                 !stream_move_cohort_shape(cohort)))) {
+    fputs("synapse-settings: invalid existing-stream move token\n", stderr);
+    return 2;
+  }
+  (void)backend_index;
+  if (apply && strcmp(ack, AUDIO_STREAM_MOVE_ACK) != 0) {
+    fputs("synapse-settings: exact existing-stream acknowledgement required\n",
+          stderr);
+    return 2;
+  }
+  int json = strcmp(format, "json") == 0;
+  if (!apply) {
+    audio_broker_stream_state state;
+    const char *reason = NULL;
+    int loaded =
+        load_broker_stream_state(stream, requested_device, &state, &reason);
+    if (loaded != 0) {
+      fprintf(stderr, "synapse-settings: existing stream unavailable: %s\n",
+              stream_move_preflight_reason(loaded, reason));
+      return 1;
+    }
+    if (!state.current_raw[0] || !state.current_device[0]) {
+      fputs("synapse-settings: current stream target unavailable\n", stderr);
+      return 1;
+    }
+    if (!state.requested_available) {
+      fputs("synapse-settings: requested stream target unavailable\n", stderr);
+      return 1;
+    }
+    char planned_cohort[32];
+    if (stream_move_cohort(&state, requested_device, planned_cohort,
+                           sizeof(planned_cohort)) != 0) {
+      fputs("synapse-settings: cannot bind existing stream plan\n", stderr);
+      return 1;
+    }
+    print_stream_move_plan(&state, requested_device, planned_cohort, json);
+    return 0;
+  }
+
+  audio_stream_move_receipt receipt;
+  if (initialize_stream_move_receipt(&receipt, stream, original_device,
+                                     requested_device) != 0) {
+    fputs("synapse-settings: invalid existing-stream move request\n", stderr);
+    return 2;
+  }
+  apply_existing_stream_move(stream, original_device, requested_device, cohort,
+                             &receipt);
+  print_stream_move_receipt(&receipt, json);
+  return strcmp(receipt.status, "Applied") == 0 ||
+                 strcmp(receipt.status, "AlreadyRouted") == 0
+             ? 0
+             : 1;
+}
+
 static int execute_default(const char *direction,
                            const audio_endpoint *endpoint) {
   const char *pactl = pactl_binary();
@@ -1387,6 +1856,9 @@ int settings_audio_command(int argc, char **argv) {
     return settings_audio_route_command(argc, argv);
   if (strcmp(argv[1], "broker-status") == 0)
     return settings_audio_broker_status_command(argc, argv);
+  if (strcmp(argv[1], "plan-stream-move") == 0 ||
+      strcmp(argv[1], "move-stream") == 0)
+    return settings_audio_stream_move_command(argc, argv);
   if (strcmp(argv[1], "inventory") == 0) {
     const char *format = NULL;
     if (parse_format(argc, argv, 2, &format) != 0) {
