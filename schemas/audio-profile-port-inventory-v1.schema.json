@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapseos.dev/schemas/settings/audio-profile-port-inventory-v1.schema.json",
+  "title": "Synapse Settings Audio profile and port inventory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "stateAuthority", "available", "reason",
+    "mutationAvailable", "cards", "endpoints", "hardwareReadback",
+    "hardwareExactRollback", "bounded"
+  ],
+  "$defs": {
+    "availability": {
+      "enum": ["available", "unknown", "unavailable"]
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "availability"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^profile-[0-9a-f]{16}$"},
+        "label": {"type": "string", "maxLength": 255},
+        "availability": {"$ref": "#/$defs/availability"}
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "availability"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^port-[0-9a-f]{16}$"},
+        "label": {"type": "string", "maxLength": 255},
+        "availability": {"$ref": "#/$defs/availability"}
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-profile-port-inventory/v1"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "available": {"type": "boolean"},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["unavailable", "timeout", "invalid-response"]}
+      ]
+    },
+    "mutationAvailable": {"type": "boolean"},
+    "cards": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "label", "activeProfile", "activeProfileLabel",
+          "mutationAvailable", "profiles"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^card-[0-9a-f]{16}$"},
+          "label": {"type": "string", "maxLength": 255},
+          "activeProfile": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "pattern": "^profile-[0-9a-f]{16}$"}
+            ]
+          },
+          "activeProfileLabel": {
+            "type": ["string", "null"],
+            "maxLength": 255
+          },
+          "mutationAvailable": {"type": "boolean"},
+          "profiles": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {"$ref": "#/$defs/profile"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"activeProfile": {"type": "null"}}},
+            "then": {
+              "properties": {
+                "activeProfileLabel": {"type": "null"},
+                "mutationAvailable": {"const": false}
+              }
+            },
+            "else": {
+              "properties": {"activeProfileLabel": {"type": "string"}}
+            }
+          }
+        ]
+      }
+    },
+    "endpoints": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "direction", "label", "activePort", "activePortLabel",
+          "mutationAvailable", "ports"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^(output|input)-[0-9a-f]{16}$"},
+          "direction": {"enum": ["output", "input"]},
+          "label": {"type": "string", "maxLength": 255},
+          "activePort": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "pattern": "^port-[0-9a-f]{16}$"}
+            ]
+          },
+          "activePortLabel": {
+            "type": ["string", "null"],
+            "maxLength": 255
+          },
+          "mutationAvailable": {"type": "boolean"},
+          "ports": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {"$ref": "#/$defs/port"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"direction": {"const": "output"}}},
+            "then": {"properties": {"id": {"pattern": "^output-[0-9a-f]{16}$"}}},
+            "else": {"properties": {"id": {"pattern": "^input-[0-9a-f]{16}$"}}}
+          },
+          {
+            "if": {"properties": {"activePort": {"type": "null"}}},
+            "then": {
+              "properties": {
+                "activePortLabel": {"type": "null"},
+                "mutationAvailable": {"const": false}
+              }
+            },
+            "else": {
+              "properties": {"activePortLabel": {"type": "string"}}
+            }
+          }
+        ]
+      }
+    },
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"available": {"const": false}}},
+      "then": {
+        "properties": {
+          "reason": {"enum": ["unavailable", "timeout", "invalid-response"]},
+          "mutationAvailable": {"const": false},
+          "cards": {"maxItems": 0},
+          "endpoints": {"maxItems": 0}
+        }
+      },
+      "else": {"properties": {"reason": {"type": "null"}}}
+    }
+  ]
+}

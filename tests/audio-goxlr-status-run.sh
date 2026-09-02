@@ -40,6 +40,34 @@ PY
   inactive)
     exit 69
     ;;
+  error-with-descendant)
+    (sleep 1; : >"$SYNAPSE_GOXLR_SURVIVOR") \
+      </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" >"$SYNAPSE_GOXLR_CHILD_PID"
+    exit 69
+    ;;
+  verify-envelope)
+    python3 - "$$" "$SYNAPSE_GOXLR_ENVELOPE_LOG" <<'PY'
+import json,os,sys
+pid=int(sys.argv[1])
+observed={
+ 'pid':pid,
+ 'pgrp':os.getpgid(pid),
+ 'lc_all':os.environ.get('LC_ALL'),
+ 'lang':os.environ.get('LANG'),
+ 'stdin':os.readlink(f'/proc/{pid}/fd/0'),
+ 'stdout':os.readlink(f'/proc/{pid}/fd/1'),
+ 'stderr':os.readlink(f'/proc/{pid}/fd/2'),
+}
+observed['valid']=(observed['pgrp']==observed['pid']
+ and observed['lc_all']=='C' and observed['lang']=='C'
+ and observed['stdin']=='/dev/null' and observed['stderr']=='/dev/null'
+ and observed['stdout'].startswith('pipe:'))
+open(sys.argv[2],'w',encoding='ascii').write(
+ json.dumps(observed,separators=(',',':'))+'\n')
+PY
+    printf '%s\n' '{"schema":"synapse.goxlr.provider-status/v2","deviceCount":0,"truncated":false,"devices":[]}'
+    ;;
   inactive-126)
     exit 126
     ;;
@@ -195,6 +223,43 @@ v=json.load(open(sys.argv[1]));assert v['status']=='Inactive'
 assert v['reason']=='provider-inactive' and not v['providerActive']
 PY
 done
+
+error_child_pid_file="$work/error-child.pid"
+error_survivor="$work/error-descendant-survived"
+SYNAPSE_GOXLR_CHILD_PID="$error_child_pid_file" \
+SYNAPSE_GOXLR_SURVIVOR="$error_survivor" \
+  run_status error-with-descendant "$work/error-with-descendant.json"
+[[ -s $error_child_pid_file ]]
+python3 - "$work/error-with-descendant.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1],encoding='utf-8'))
+assert value['status']=='Inactive' and value['reason']=='provider-inactive'
+PY
+sleep 1.2
+[[ ! -e $error_survivor ]]
+error_child_pid=$(<"$error_child_pid_file")
+[[ $error_child_pid =~ ^[1-9][0-9]*$ ]]
+error_child_state=$(ps -o stat= -p "$error_child_pid" 2>/dev/null || true)
+[[ -z $error_child_state || $error_child_state == Z* ]]
+
+envelope_log="$work/envelope.observed"
+set +e
+(
+  exec 0>&- 1>&- 2>&-
+  env SYNAPSE_GOXLR="$work/synapse-goxlr-fake" \
+    SYNAPSE_GOXLR_FAKE_MODE=verify-envelope \
+    SYNAPSE_GOXLR_FAKE_LOG="$work/argv.log" \
+    SYNAPSE_GOXLR_ENVELOPE_LOG="$envelope_log" \
+    "$binary" audio goxlr-status --format json
+)
+envelope_status=$?
+set -e
+[[ $envelope_status == 0 ]]
+python3 - "$envelope_log" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1],encoding='ascii'))
+assert value['valid']
+PY
 
 run_status signaled "$work/signaled.json"
 python3 - "$work/signaled.json" <<'PY'

@@ -5,8 +5,12 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointer>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -40,6 +44,8 @@ public:
         QByteArrayLiteral("SYNAPSE_AUDIO_MOVE_MODE"),
         QByteArrayLiteral("SYNAPSE_AUDIO_CONTROL_LOG"),
         QByteArrayLiteral("SYNAPSE_AUDIO_CONTROL_MODE"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_SELECTION_LOG"),
+        QByteArrayLiteral("SYNAPSE_AUDIO_SELECTION_MODE"),
         QByteArrayLiteral("SYNAPSE_ADAPTER_REAL_BACKEND"),
         QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_RESPONSE"),
         QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_EXIT"),
@@ -99,24 +105,38 @@ public:
             audio_ + QStringLiteral("/sinks.json"),
             QByteArrayLiteral(
                 "[{\"index\":10,\"name\":\"sink.a\",\"description\":"
-                "\"Integrated "
-                "audio\",\"mute\":false,\"volume\":{\"left\":{\"value\":32768}}"
-                "},{\"index\":11,\"name\":\"sink.b\",\"description\":\"USB "
-                "headset\",\"mute\":false,\"volume\":{\"left\":{\"value\":"
-                "65536}}}]\n")) &&
-        writeFile(audio_ + QStringLiteral("/sources.json"),
-                  QByteArrayLiteral(
-                      "[{\"index\":20,\"name\":\"source.a\",\"description\":"
-                      "\"Built-in microphone\",\"monitor_of_sink\":null,"
-                      "\"monitor_source\":\"\",\"mute\":false,\"volume\":{"
-                      "\"mono\":{\"value\":32768}}},{\"index\":21,\"name\":"
-                      "\"source.b\",\"description\":\"USB microphone\","
-                      "\"monitor_of_sink\":null,\"monitor_source\":\"\","
-                      "\"mute\":false,\"volume\":{\"mono\":{\"value\":"
-                      "65536}}},{\"index\":22,\"name\":\"sink.a.monitor\","
-                      "\"description\":\"Monitor\",\"monitor_of_sink\":null,"
-                      "\"monitor_source\":\"sink.a\",\"mute\":false,"
-                      "\"volume\":{\"mono\":{\"value\":65536}}}]\n")) &&
+                "\"Integrated audio\",\"mute\":false,\"volume\":{\"left\":"
+                "{\"value\":32768}},\"ports\":[{\"name\":\"port.speaker\","
+                "\"description\":\"Speakers\",\"availability\":\"available\"},"
+                "{\"name\":\"port.headphones\",\"description\":\"Headphones\","
+                "\"availability\":\"availability unknown\"}],\"active_port\":"
+                "\"port.speaker\"},{\"index\":11,\"name\":\"sink.b\","
+                "\"description\":\"USB headset\",\"mute\":false,\"volume\":{"
+                "\"left\":{\"value\":65536}},\"ports\":[{\"name\":\"port.usb\","
+                "\"description\":\"USB "
+                "output\",\"availability\":\"available\"}],"
+                "\"active_port\":\"port.usb\"}]\n")) &&
+        writeFile(
+            audio_ + QStringLiteral("/sources.json"),
+            QByteArrayLiteral(
+                "[{\"index\":20,\"name\":\"source.a\",\"description\":"
+                "\"Built-in microphone\",\"monitor_of_sink\":null,"
+                "\"monitor_source\":\"\",\"mute\":false,\"volume\":{"
+                "\"mono\":{\"value\":32768}},\"ports\":[{\"name\":"
+                "\"port.internal\",\"description\":\"Internal microphone\","
+                "\"availability\":\"available\"},{\"name\":\"port.mic\","
+                "\"description\":\"External microphone\",\"availability\":"
+                "\"availability unknown\"}],\"active_port\":\"port.internal\"},"
+                "{\"index\":21,\"name\":\"source.b\",\"description\":"
+                "\"USB microphone\",\"monitor_of_sink\":null,"
+                "\"monitor_source\":\"\",\"mute\":false,\"volume\":{"
+                "\"mono\":{\"value\":65536}},\"ports\":[{\"name\":"
+                "\"port.usb-mic\",\"description\":\"USB microphone\","
+                "\"availability\":\"available\"}],\"active_port\":"
+                "\"port.usb-mic\"},{\"index\":22,\"name\":\"sink.a.monitor\","
+                "\"description\":\"Monitor\",\"monitor_of_sink\":null,"
+                "\"monitor_source\":\"sink.a\",\"mute\":false,"
+                "\"volume\":{\"mono\":{\"value\":65536}}}]\n")) &&
         writeFile(
             audio_ + QStringLiteral("/sink-inputs.json"),
             QByteArrayLiteral(
@@ -130,7 +150,10 @@ public:
             audio_ + QStringLiteral("/cards.json"),
             QByteArrayLiteral(
                 "[{\"index\":40,\"name\":\"card.a\",\"description\":\"Primary "
-                "audio card\",\"active_profile\":\"HiFi\"}]\n")) &&
+                "audio card\",\"profiles\":{\"profile.hifi\":{\"description\":"
+                "\"High Fidelity\",\"available\":true},\"profile.pro\":{"
+                "\"description\":\"Pro Audio\"}},\"active_profile\":"
+                "\"profile.hifi\"}]\n")) &&
         writeFile(audio_ + QStringLiteral("/default-sink"),
                   QByteArrayLiteral("sink.a\n")) &&
         writeFile(audio_ + QStringLiteral("/default-source"),
@@ -203,6 +226,47 @@ public:
         "\"$SYNAPSE_AUDIO_FIXTURES/sink-inputs.json\"; "
         "[ \"${SYNAPSE_AUDIO_MOVE_MODE:-success}\" != mutate-fail ] || "
         "exit 65 ;;\n"
+        "  'set-card-profile card.a profile.hifi') "
+        "[ -z \"${SYNAPSE_AUDIO_SELECTION_LOG:-}\" ] || printf "
+        "'profile\\tcard.a\\tprofile.hifi\\n' "
+        ">>\"$SYNAPSE_AUDIO_SELECTION_LOG\"; "
+        "sed 's/\"active_profile\":\"profile.pro\"/"
+        "\"active_profile\":\"profile.hifi\"/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.json\"; "
+        "[ \"${SYNAPSE_AUDIO_SELECTION_MODE:-success}\" != "
+        "fail-after-mutate ] || exit 65 ;;\n"
+        "  'set-card-profile card.a profile.pro') "
+        "[ -z \"${SYNAPSE_AUDIO_SELECTION_LOG:-}\" ] || printf "
+        "'profile\\tcard.a\\tprofile.pro\\n' "
+        ">>\"$SYNAPSE_AUDIO_SELECTION_LOG\"; "
+        "sed 's/\"active_profile\":\"profile.hifi\"/"
+        "\"active_profile\":\"profile.pro\"/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/cards.json\" ;;\n"
+        "  'set-sink-port sink.a port.headphones') "
+        "[ -z \"${SYNAPSE_AUDIO_SELECTION_LOG:-}\" ] || printf "
+        "'port\\tsink.a\\tport.headphones\\n' "
+        ">>\"$SYNAPSE_AUDIO_SELECTION_LOG\"; "
+        "sed 's/\"active_port\":\"port.speaker\"/"
+        "\"active_port\":\"port.headphones\"/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sinks.json\" ;;\n"
+        "  'set-source-port source.a port.mic') "
+        "[ -z \"${SYNAPSE_AUDIO_SELECTION_LOG:-}\" ] || printf "
+        "'port\\tsource.a\\tport.mic\\n' >>\"$SYNAPSE_AUDIO_SELECTION_LOG\"; "
+        "sed 's/\"active_port\":\"port.internal\"/"
+        "\"active_port\":\"port.mic\"/' "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sources.json\" >"
+        "\"$SYNAPSE_AUDIO_FIXTURES/sources.next\" && mv "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sources.next\" "
+        "\"$SYNAPSE_AUDIO_FIXTURES/sources.json\" ;;\n"
         "  *) exit 64 ;;\n"
         "esac\n");
     valid_ = writeFile(pactl_, script,
@@ -234,6 +298,9 @@ public:
   QString applicationDirectory() const { return applicationDirectory_; }
   QString moveLog() const { return root_ + QStringLiteral("/move.log"); }
   QString controlLog() const { return root_ + QStringLiteral("/control.log"); }
+  QString selectionLog() const {
+    return root_ + QStringLiteral("/selection.log");
+  }
   QString policy() const { return policy_; }
 
   void activate() const {
@@ -268,9 +335,44 @@ QString testBackend() {
 QByteArray unavailableInventory() {
   return QByteArrayLiteral(
       "{\"schema\":\"synapse.settings.audio-inventory/"
-      "v1\",\"stateAuthority\":\"pipewire-pulse-model\",\"available\":false,"
+      "v2\",\"stateAuthority\":\"pipewire-pulse-model\",\"available\":false,"
       "\"reason\":\"unavailable\",\"mutationAvailable\":false,\"outputs\":[],"
       "\"inputs\":[],\"streams\":[],\"cards\":[],\"bounded\":true}\n");
+}
+
+QStringList requiredGuiLocales() {
+  return {QStringLiteral("ar"),       QStringLiteral("as"),
+          QStringLiteral("ast"),      QStringLiteral("az"),
+          QStringLiteral("az_AZ"),    QStringLiteral("be"),
+          QStringLiteral("bg"),       QStringLiteral("bn"),
+          QStringLiteral("ca"),       QStringLiteral("ca@valencia"),
+          QStringLiteral("cs_CZ"),    QStringLiteral("da"),
+          QStringLiteral("de"),       QStringLiteral("el"),
+          QStringLiteral("en_US"),    QStringLiteral("en_GB"),
+          QStringLiteral("eo"),       QStringLiteral("es"),
+          QStringLiteral("es_AR"),    QStringLiteral("es_MX"),
+          QStringLiteral("et"),       QStringLiteral("eu"),
+          QStringLiteral("fa"),       QStringLiteral("fi_FI"),
+          QStringLiteral("fr"),       QStringLiteral("fur"),
+          QStringLiteral("gl"),       QStringLiteral("he"),
+          QStringLiteral("hi"),       QStringLiteral("hr"),
+          QStringLiteral("hu"),       QStringLiteral("ia"),
+          QStringLiteral("id"),       QStringLiteral("is"),
+          QStringLiteral("it_IT"),    QStringLiteral("ja"),
+          QStringLiteral("ka"),       QStringLiteral("ko"),
+          QStringLiteral("lt"),       QStringLiteral("ml"),
+          QStringLiteral("mr"),       QStringLiteral("nb"),
+          QStringLiteral("nl"),       QStringLiteral("oc"),
+          QStringLiteral("pl"),       QStringLiteral("pt_BR"),
+          QStringLiteral("pt_PT"),    QStringLiteral("ro"),
+          QStringLiteral("ru"),       QStringLiteral("si"),
+          QStringLiteral("sk"),       QStringLiteral("sl"),
+          QStringLiteral("sq"),       QStringLiteral("sr"),
+          QStringLiteral("sr@latin"), QStringLiteral("sv"),
+          QStringLiteral("tg"),       QStringLiteral("th"),
+          QStringLiteral("tr_TR"),    QStringLiteral("uk"),
+          QStringLiteral("uz"),       QStringLiteral("vi"),
+          QStringLiteral("zh_CN"),    QStringLiteral("zh_TW")};
 }
 
 } // namespace
@@ -286,19 +388,34 @@ private slots:
 
   void localizationUsesBoundedEnglishFallback() {
     SettingsLocalization localization;
+    const QStringList locales = requiredGuiLocales();
+    QCOMPARE(locales.size(), 64);
+    for (const QString &locale : locales) {
+      QVERIFY2(localization.initialize(locale), qPrintable(locale));
+      QCOMPARE(localization.localeId(), locale);
+    }
+
     QVERIFY(localization.initialize(QStringLiteral("it_IT.UTF-8@euro")));
     QCOMPARE(localization.localeId(), QStringLiteral("it_IT"));
     QCOMPARE(QCoreApplication::translate("Main", "Settings"),
              QStringLiteral("Impostazioni"));
 
     QVERIFY(localization.initialize(QStringLiteral("fr_FR")));
-    QCOMPARE(localization.localeId(), QStringLiteral("en_US"));
+    QCOMPARE(localization.localeId(), QStringLiteral("fr"));
     QCOMPARE(QCoreApplication::translate("Main", "Settings"),
              QStringLiteral("Settings"));
+
+    QVERIFY(localization.initialize(QStringLiteral("sr_RS.UTF-8@latin")));
+    QCOMPARE(localization.localeId(), QStringLiteral("sr@latin"));
+    QVERIFY(localization.initialize(QStringLiteral("ar")));
+    QCOMPARE(QGuiApplication::layoutDirection(), Qt::RightToLeft);
 
     QString unsafeLocale = QStringLiteral("it_IT");
     unsafeLocale.append(QChar(0x1f));
     QVERIFY(localization.initialize(unsafeLocale));
+    QCOMPARE(localization.localeId(), QStringLiteral("en_US"));
+    QCOMPARE(QGuiApplication::layoutDirection(), Qt::LeftToRight);
+    QVERIFY(localization.initialize(QStringLiteral("zh_HK")));
     QCOMPARE(localization.localeId(), QStringLiteral("en_US"));
   }
 
@@ -328,9 +445,57 @@ private slots:
     QVERIFY(!AudioContracts::decodeInventory(unknown, &snapshot, &error));
     QCOMPARE(error, QStringLiteral("contract-invalid"));
 
+    QByteArray duplicateObjectKey = unavailableInventory();
+    duplicateObjectKey.replace(
+        "{\"schema\":", "{\"schema\":\"synapse.settings.audio-inventory/v2\","
+                        "\"schema\":");
+    QVERIFY(!AudioContracts::decodeInventory(duplicateObjectKey, &snapshot,
+                                             &error));
+    QByteArray escapedDuplicateObjectKey = unavailableInventory();
+    escapedDuplicateObjectKey.replace(
+        "{\"schema\":", "{\"schema\":\"synapse.settings.audio-inventory/v2\","
+                        "\"\\u0073chema\":");
+    QVERIFY(!AudioContracts::decodeInventory(escapedDuplicateObjectKey,
+                                             &snapshot, &error));
+    QByteArray trailingObject = unavailableInventory();
+    trailingObject.append("{}\n");
+    QVERIFY(
+        !AudioContracts::decodeInventory(trailingObject, &snapshot, &error));
+    QByteArray trailingComma = unavailableInventory();
+    trailingComma.replace("\"bounded\":true}", "\"bounded\":true,}");
+    QVERIFY(!AudioContracts::decodeInventory(trailingComma, &snapshot, &error));
+    QByteArray invalidEscape = unavailableInventory();
+    invalidEscape.replace("\"reason\":\"unavailable\"", "\"reason\":\"\\x20\"");
+    QVERIFY(!AudioContracts::decodeInventory(invalidEscape, &snapshot, &error));
+    QByteArray escapedNul = unavailableInventory();
+    escapedNul.replace("\"reason\":\"unavailable\"", "\"reason\":\"\\u0000\"");
+    QVERIFY(!AudioContracts::decodeInventory(escapedNul, &snapshot, &error));
+    QByteArray unpairedSurrogate = unavailableInventory();
+    unpairedSurrogate.replace("\"reason\":\"unavailable\"",
+                              "\"reason\":\"\\ud83d\"");
+    QVERIFY(
+        !AudioContracts::decodeInventory(unpairedSurrogate, &snapshot, &error));
+    QByteArray surrogatePair = unavailableInventory();
+    surrogatePair.replace("\"reason\":\"unavailable\"",
+                          "\"reason\":\"\\ud83d\\ude00\"");
+    QVERIFY(AudioContracts::decodeInventory(surrogatePair, &snapshot, &error));
+    QCOMPARE(snapshot.reason, QString::fromUtf8("😀"));
+    QByteArray invalidLiteral = unavailableInventory();
+    invalidLiteral.replace("\"available\":false", "\"available\":falsx");
+    QVERIFY(
+        !AudioContracts::decodeInventory(invalidLiteral, &snapshot, &error));
+    QByteArray leadingZero = unavailableInventory();
+    leadingZero.replace("\"available\":false", "\"available\":01");
+    QVERIFY(!AudioContracts::decodeInventory(leadingZero, &snapshot, &error));
+    QByteArray invalidUtf8 = unavailableInventory();
+    const qsizetype invalidByte = invalidUtf8.indexOf("unavailable");
+    QVERIFY(invalidByte >= 0);
+    invalidUtf8[invalidByte] = static_cast<char>(0xff);
+    QVERIFY(!AudioContracts::decodeInventory(invalidUtf8, &snapshot, &error));
+
     QByteArray duplicateStream = QByteArrayLiteral(
         "{\"schema\":\"synapse.settings.audio-inventory/"
-        "v1\",\"stateAuthority\":\"pipewire-pulse-model\",\"available\":true,"
+        "v2\",\"stateAuthority\":\"pipewire-pulse-model\",\"available\":true,"
         "\"reason\":null,\"mutationAvailable\":true,\"outputs\":[{\"id\":"
         "\"output-0123456789abcdef\",\"label\":\"Output\",\"default\":true,"
         "\"volumePercent\":50,\"muted\":false}],\"inputs\":[],\"streams\":[{"
@@ -342,6 +507,18 @@ private slots:
         "\"processRuleAvailable\":true}],\"cards\":[],\"bounded\":true}\n");
     QVERIFY(
         !AudioContracts::decodeInventory(duplicateStream, &snapshot, &error));
+
+    const QByteArray duplicateActiveProfile = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-inventory/v2\","
+        "\"stateAuthority\":\"pipewire-pulse-model\",\"available\":true,"
+        "\"reason\":null,\"mutationAvailable\":true,\"outputs\":[],"
+        "\"inputs\":[],\"streams\":[],\"cards\":[{\"id\":"
+        "\"card-0123456789abcdef\",\"label\":\"One\",\"activeProfile\":"
+        "\"profile-0123456789abcdef\"},{\"id\":"
+        "\"card-fedcba9876543210\",\"label\":\"Two\",\"activeProfile\":"
+        "\"profile-0123456789abcdef\"}],\"bounded\":true}\n");
+    QVERIFY(!AudioContracts::decodeInventory(duplicateActiveProfile, &snapshot,
+                                             &error));
 
     QByteArray oversized(kMaximumInventoryForTest(), 'x');
     QVERIFY(!AudioContracts::decodeInventory(oversized, &snapshot, &error));
@@ -922,6 +1099,519 @@ private slots:
     QVERIFY(adapter.audioGoxlrDevices().isEmpty());
   }
 
+  void profilePortContractsAndGuardedTransactions() {
+    ScopedEnvironment restore;
+    AudioFixture fixture;
+    QVERIFY(fixture.valid());
+    fixture.activate();
+    QVERIFY(qputenv("SYNAPSE_AUDIO_SELECTION_LOG",
+                    fixture.selectionLog().toUtf8()));
+
+    AudioAdapter adapter(
+        testBackend(), [](const QString &) { return QString(); }, 5000);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 10000);
+    QCOMPARE(loaded.constFirst().constFirst().toBool(), true);
+    QVERIFY(adapter.audioSnapshotReady());
+    QVERIFY(adapter.audioProfilePortAvailable());
+    QVERIFY(adapter.audioProfilePortMutationAvailable());
+    QVERIFY(adapter.audioProfilePortReason().isEmpty());
+    QCOMPARE(adapter.audioProfileCards().size(), 1);
+    QCOMPARE(adapter.audioPortEndpoints().size(), 4);
+
+    const QByteArray projected =
+        QJsonDocument::fromVariant(
+            QVariantMap{
+                {QStringLiteral("cards"), adapter.audioProfileCards()},
+                {QStringLiteral("endpoints"), adapter.audioPortEndpoints()},
+            })
+            .toJson(QJsonDocument::Compact);
+    QVERIFY(!projected.contains("card.a"));
+    QVERIFY(!projected.contains("profile.hifi"));
+    QVERIFY(!projected.contains("sink.a"));
+    QVERIFY(!projected.contains("port.speaker"));
+    QVERIFY(adapter.metaObject()->indexOfProperty("audioSelectionCohort") < 0);
+    QVERIFY(adapter.metaObject()->indexOfProperty("audioSelectionAck") < 0);
+
+    QVariantMap card = adapter.audioProfileCards().constFirst().toMap();
+    QCOMPARE(card.value(QStringLiteral("activeProfileLabel")).toString(),
+             QStringLiteral("High Fidelity"));
+    QVariantMap proProfile;
+    for (const QVariant &entry :
+         card.value(QStringLiteral("profiles")).toList()) {
+      const QVariantMap profile = entry.toMap();
+      if (profile.value(QStringLiteral("label")).toString() ==
+          QStringLiteral("Pro Audio"))
+        proProfile = profile;
+    }
+    QVERIFY(!proProfile.isEmpty());
+    QCOMPARE(proProfile.value(QStringLiteral("availability")).toString(),
+             QStringLiteral("unknown"));
+
+    QSignalSpy selectionRequested(
+        &adapter, &AudioAdapter::audioSelectionConfirmationRequested);
+    QVERIFY(adapter.planAudioProfile(
+        card.value(QStringLiteral("id")).toString(),
+        proProfile.value(QStringLiteral("id")).toString()));
+    QVERIFY(adapter.audioBusy());
+    QTRY_COMPARE_WITH_TIMEOUT(selectionRequested.size(), 1, 5000);
+    QVERIFY(!adapter.audioBusy());
+    QVERIFY(adapter.audioSelectionConfirmationOpen());
+    QCOMPARE(adapter.audioSelectionKind(), QStringLiteral("profile"));
+    QCOMPARE(adapter.audioSelectionTargetLabel(),
+             QStringLiteral("Primary audio card"));
+    QCOMPARE(adapter.audioSelectionOriginalLabel(),
+             QStringLiteral("High Fidelity"));
+    QCOMPARE(adapter.audioSelectionRequestedLabel(),
+             QStringLiteral("Pro Audio"));
+    QVERIFY(!QFileInfo::exists(fixture.selectionLog()));
+    const QVariantMap output = adapter.audioOutputs().constFirst().toMap();
+    QVERIFY(!adapter.setAudioDefault(
+        QStringLiteral("output"),
+        output.value(QStringLiteral("id")).toString()));
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("selection-invalid"));
+
+    QSignalSpy operation(&adapter, &AudioAdapter::audioOperationFinished);
+    QVERIFY(adapter.confirmAudioSelection());
+    QVERIFY(!adapter.audioSelectionConfirmationOpen());
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter.audioBusy(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(operation.size() >= 1, 10000);
+    QCOMPARE(adapter.audioStatusId(), QStringLiteral("audio-profile-applied"));
+    QCOMPARE(adapter.audioErrorId(), QString());
+    QCOMPARE(QFile(fixture.selectionLog()).exists(), true);
+    QFile selectionLog(fixture.selectionLog());
+    QVERIFY(selectionLog.open(QIODevice::ReadOnly));
+    QCOMPARE(selectionLog.readAll(),
+             QByteArrayLiteral("profile\tcard.a\tprofile.pro\n"));
+    selectionLog.close();
+    card = adapter.audioProfileCards().constFirst().toMap();
+    QCOMPARE(card.value(QStringLiteral("activeProfileLabel")).toString(),
+             QStringLiteral("Pro Audio"));
+
+    QVariantMap integratedOutput;
+    QVariantMap headphones;
+    for (const QVariant &entry : adapter.audioPortEndpoints()) {
+      const QVariantMap endpoint = entry.toMap();
+      if (endpoint.value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Integrated audio"))
+        continue;
+      integratedOutput = endpoint;
+      for (const QVariant &optionEntry :
+           endpoint.value(QStringLiteral("ports")).toList()) {
+        const QVariantMap option = optionEntry.toMap();
+        if (option.value(QStringLiteral("label")).toString() ==
+            QStringLiteral("Headphones"))
+          headphones = option;
+      }
+    }
+    QVERIFY(!integratedOutput.isEmpty() && !headphones.isEmpty());
+    QVERIFY(adapter.planAudioPort(
+        QStringLiteral("output"),
+        integratedOutput.value(QStringLiteral("id")).toString(),
+        headphones.value(QStringLiteral("id")).toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(adapter.audioSelectionConfirmationOpen(), 5000);
+    adapter.cancelAudioSelection();
+    QVERIFY(!adapter.audioSelectionConfirmationOpen());
+    QCOMPARE(adapter.audioStatusId(), QString());
+    QCOMPARE(adapter.audioErrorId(), QString());
+    selectionLog.setFileName(fixture.selectionLog());
+    QVERIFY(selectionLog.open(QIODevice::ReadOnly));
+    QCOMPARE(selectionLog.readAll(),
+             QByteArrayLiteral("profile\tcard.a\tprofile.pro\n"));
+    selectionLog.close();
+
+    QVERIFY(adapter.planAudioPort(
+        QStringLiteral("output"),
+        integratedOutput.value(QStringLiteral("id")).toString(),
+        headphones.value(QStringLiteral("id")).toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(adapter.audioSelectionConfirmationOpen(), 5000);
+    const int operationsBeforePort = operation.size();
+    QVERIFY(adapter.confirmAudioSelection());
+    QTRY_VERIFY_WITH_TIMEOUT(operation.size() > operationsBeforePort, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter.audioBusy(), 10000);
+    QCOMPARE(adapter.audioStatusId(), QStringLiteral("audio-port-applied"));
+    selectionLog.setFileName(fixture.selectionLog());
+    QVERIFY(selectionLog.open(QIODevice::ReadOnly));
+    QCOMPARE(selectionLog.readAll(),
+             QByteArrayLiteral("profile\tcard.a\tprofile.pro\n"
+                               "port\tsink.a\tport.headphones\n"));
+    selectionLog.close();
+
+    QVERIFY(!adapter.planAudioProfile(
+        QStringLiteral("card-not-a-token"),
+        proProfile.value(QStringLiteral("id")).toString()));
+    QVERIFY(!adapter.planAudioPort(
+        QStringLiteral("input"),
+        integratedOutput.value(QStringLiteral("id")).toString(),
+        headphones.value(QStringLiteral("id")).toString()));
+
+    auto runBackend = [](const QStringList &arguments, int *exitCode) {
+      QProcess process;
+      process.setProgram(testBackend());
+      process.setArguments(arguments);
+      process.start();
+      if (!process.waitForStarted(3000) || !process.waitForFinished(10000)) {
+        if (exitCode)
+          *exitCode = -1;
+        return QByteArray();
+      }
+      if (exitCode)
+        *exitCode = process.exitCode();
+      return process.readAllStandardOutput();
+    };
+    int exitCode = -1;
+    const QByteArray inventoryPayload = runBackend(
+        {QStringLiteral("audio"), QStringLiteral("profile-port-inventory"),
+         QStringLiteral("--format"), QStringLiteral("json")},
+        &exitCode);
+    QCOMPARE(exitCode, 0);
+    AudioPresentationSnapshot snapshot;
+    snapshot.available = adapter.audioAvailable();
+    snapshot.mutationAvailable = true;
+    snapshot.outputs = adapter.audioOutputs();
+    snapshot.inputs = adapter.audioInputs();
+    snapshot.streams = adapter.audioStreams();
+    snapshot.cards = adapter.audioCards();
+    QString contractError;
+    QVERIFY(AudioContracts::decodeProfilePortInventory(
+        inventoryPayload, &snapshot, &contractError));
+    QVERIFY(snapshot.profilePortAvailable);
+    QJsonObject relabeledInventory =
+        QJsonDocument::fromJson(inventoryPayload).object();
+    QJsonArray relabeledCards =
+        relabeledInventory.value(QStringLiteral("cards")).toArray();
+    QJsonObject relabeledCard = relabeledCards.at(0).toObject();
+    relabeledCard.insert(QStringLiteral("label"),
+                         QStringLiteral("Presentation-only card label"));
+    relabeledCards.replace(0, relabeledCard);
+    relabeledInventory.insert(QStringLiteral("cards"), relabeledCards);
+    QVERIFY(AudioContracts::decodeProfilePortInventory(
+        QJsonDocument(relabeledInventory).toJson(QJsonDocument::Compact),
+        &snapshot, &contractError));
+    QCOMPARE(snapshot.profileCards.constFirst()
+                 .toMap()
+                 .value(QStringLiteral("label"))
+                 .toString(),
+             QStringLiteral("Presentation-only card label"));
+    QVERIFY(AudioContracts::decodeProfilePortInventory(
+        inventoryPayload, &snapshot, &contractError));
+
+    QJsonObject invalidInventory =
+        QJsonDocument::fromJson(inventoryPayload).object();
+    invalidInventory.insert(QStringLiteral("rawName"),
+                            QStringLiteral("card.a"));
+    QVERIFY(!AudioContracts::decodeProfilePortInventory(
+        QJsonDocument(invalidInventory).toJson(QJsonDocument::Compact),
+        &snapshot, &contractError));
+    invalidInventory = QJsonDocument::fromJson(inventoryPayload).object();
+    QJsonArray invalidCards =
+        invalidInventory.value(QStringLiteral("cards")).toArray();
+    QJsonObject invalidCard = invalidCards.at(0).toObject();
+    QJsonArray duplicateProfiles =
+        invalidCard.value(QStringLiteral("profiles")).toArray();
+    duplicateProfiles.append(duplicateProfiles.at(0));
+    invalidCard.insert(QStringLiteral("profiles"), duplicateProfiles);
+    invalidCards.replace(0, invalidCard);
+    invalidInventory.insert(QStringLiteral("cards"), invalidCards);
+    QVERIFY(!AudioContracts::decodeProfilePortInventory(
+        QJsonDocument(invalidInventory).toJson(QJsonDocument::Compact),
+        &snapshot, &contractError));
+
+    auto profileBoundPayload = [](int cardCount, int finalOptionCount,
+                                  AudioPresentationSnapshot *baseSnapshot) {
+      *baseSnapshot = AudioPresentationSnapshot();
+      baseSnapshot->available = true;
+      baseSnapshot->mutationAvailable = true;
+      QJsonArray cardsArray;
+      quint64 optionIdentity = 1;
+      for (int cardIndex = 0; cardIndex < cardCount; ++cardIndex) {
+        const QString cardId = QStringLiteral("card-%1").arg(
+            static_cast<qulonglong>(cardIndex + 1), 16, 16, QChar(u'0'));
+        const QString cardLabel = QStringLiteral("Card %1").arg(cardIndex + 1);
+        const int optionCount =
+            cardIndex + 1 == cardCount ? finalOptionCount : 64;
+        QJsonArray profiles;
+        QString activeProfile;
+        for (int optionIndex = 0; optionIndex < optionCount; ++optionIndex) {
+          const QString profileId =
+              QStringLiteral("profile-%1")
+                  .arg(static_cast<qulonglong>(optionIdentity++), 16, 16,
+                       QChar(u'0'));
+          if (optionIndex == 0)
+            activeProfile = profileId;
+          profiles.append(QJsonObject{
+              {QStringLiteral("id"), profileId},
+              {QStringLiteral("label"),
+               QStringLiteral("Profile %1").arg(optionIdentity)},
+              {QStringLiteral("availability"), QStringLiteral("available")},
+          });
+        }
+        baseSnapshot->cards.append(QVariantMap{
+            {QStringLiteral("id"), cardId},
+            {QStringLiteral("label"), cardLabel},
+            {QStringLiteral("activeProfile"), activeProfile},
+        });
+        cardsArray.append(QJsonObject{
+            {QStringLiteral("id"), cardId},
+            {QStringLiteral("label"), cardLabel},
+            {QStringLiteral("activeProfile"), activeProfile},
+            {QStringLiteral("activeProfileLabel"),
+             QStringLiteral("Profile %1")
+                 .arg(optionIdentity - static_cast<quint64>(optionCount) + 1)},
+            {QStringLiteral("mutationAvailable"), true},
+            {QStringLiteral("profiles"), profiles},
+        });
+      }
+      return QJsonDocument(
+                 QJsonObject{
+                     {QStringLiteral("schema"),
+                      QStringLiteral(
+                          "synapse.settings.audio-profile-port-inventory/v1")},
+                     {QStringLiteral("stateAuthority"),
+                      QStringLiteral("pipewire-pulse-model")},
+                     {QStringLiteral("available"), true},
+                     {QStringLiteral("reason"), QJsonValue::Null},
+                     {QStringLiteral("mutationAvailable"), true},
+                     {QStringLiteral("cards"), cardsArray},
+                     {QStringLiteral("endpoints"), QJsonArray()},
+                     {QStringLiteral("hardwareReadback"), false},
+                     {QStringLiteral("hardwareExactRollback"), false},
+                     {QStringLiteral("bounded"), true},
+                 })
+          .toJson(QJsonDocument::Compact);
+    };
+    AudioPresentationSnapshot maximumProfileSnapshot;
+    const QByteArray maximumProfilePayload =
+        profileBoundPayload(8, 64, &maximumProfileSnapshot);
+    QVERIFY(AudioContracts::decodeProfilePortInventory(
+        maximumProfilePayload, &maximumProfileSnapshot, &contractError));
+    AudioPresentationSnapshot oversizedProfileSnapshot;
+    const QByteArray oversizedProfilePayload =
+        profileBoundPayload(9, 1, &oversizedProfileSnapshot);
+    QVERIFY(!AudioContracts::decodeProfilePortInventory(
+        oversizedProfilePayload, &oversizedProfileSnapshot, &contractError));
+
+    card = adapter.audioProfileCards().constFirst().toMap();
+    AudioSelectionPlan expected;
+    expected.selection = QStringLiteral("profile");
+    expected.target = card.value(QStringLiteral("id")).toString();
+    expected.targetType = QStringLiteral("card");
+    expected.targetLabel = card.value(QStringLiteral("label")).toString();
+    expected.originalSelection =
+        card.value(QStringLiteral("activeProfile")).toString();
+    expected.originalLabel =
+        card.value(QStringLiteral("activeProfileLabel")).toString();
+    expected.requestedSelection = expected.originalSelection;
+    expected.requestedLabel = expected.originalLabel;
+    expected.requestedAvailability = QStringLiteral("unknown");
+    const QByteArray planPayload =
+        runBackend({QStringLiteral("audio"), QStringLiteral("plan-profile"),
+                    QStringLiteral("--card"), expected.target,
+                    QStringLiteral("--profile"), expected.requestedSelection,
+                    QStringLiteral("--format"), QStringLiteral("json")},
+                   &exitCode);
+    QCOMPARE(exitCode, 0);
+    AudioSelectionPlan decodedPlan;
+    QVERIFY(AudioContracts::decodeSelectionPlan(planPayload, expected,
+                                                &decodedPlan, &contractError));
+    QVERIFY(!decodedPlan.changed && !decodedPlan.cohort.isEmpty());
+    QJsonObject relabeledPlan = QJsonDocument::fromJson(planPayload).object();
+    relabeledPlan.insert(QStringLiteral("targetLabel"),
+                         QStringLiteral("Fresh target label"));
+    relabeledPlan.insert(QStringLiteral("originalLabel"),
+                         QStringLiteral("Fresh original label"));
+    relabeledPlan.insert(QStringLiteral("requestedLabel"),
+                         QStringLiteral("Fresh requested label"));
+    relabeledPlan.insert(QStringLiteral("requestedAvailability"),
+                         QStringLiteral("available"));
+    QVERIFY(AudioContracts::decodeSelectionPlan(
+        QJsonDocument(relabeledPlan).toJson(QJsonDocument::Compact), expected,
+        &decodedPlan, &contractError));
+    QCOMPARE(decodedPlan.targetLabel, QStringLiteral("Fresh target label"));
+    QCOMPARE(decodedPlan.originalLabel, QStringLiteral("Fresh original label"));
+    QCOMPARE(decodedPlan.requestedLabel,
+             QStringLiteral("Fresh requested label"));
+    QCOMPARE(decodedPlan.requestedAvailability, QStringLiteral("available"));
+    QVERIFY(AudioContracts::decodeSelectionPlan(planPayload, expected,
+                                                &decodedPlan, &contractError));
+    QJsonObject invalidPlan = QJsonDocument::fromJson(planPayload).object();
+    invalidPlan.insert(QStringLiteral("playbackStarted"), true);
+    QVERIFY(!AudioContracts::decodeSelectionPlan(
+        QJsonDocument(invalidPlan).toJson(QJsonDocument::Compact), expected,
+        &decodedPlan, &contractError));
+    invalidPlan = QJsonDocument::fromJson(planPayload).object();
+    invalidPlan.insert(QStringLiteral("defaultChanged"), true);
+    QVERIFY(!AudioContracts::decodeSelectionPlan(
+        QJsonDocument(invalidPlan).toJson(QJsonDocument::Compact), expected,
+        &decodedPlan, &contractError));
+
+    const QByteArray receiptPayload =
+        runBackend({QStringLiteral("audio"), QStringLiteral("set-profile"),
+                    QStringLiteral("--card"), expected.target,
+                    QStringLiteral("--from-profile"),
+                    expected.originalSelection, QStringLiteral("--profile"),
+                    expected.requestedSelection, QStringLiteral("--cohort"),
+                    decodedPlan.cohort, QStringLiteral("--ack"),
+                    QStringLiteral("synapse-settings/audio-profile-port/v1"),
+                    QStringLiteral("--format"), QStringLiteral("json")},
+                   &exitCode);
+    QCOMPARE(exitCode, 0);
+    QString receiptStatus;
+    QString receiptReason;
+    bool receiptChanged = true;
+    bool rollbackAttempted = true;
+    bool rollbackVerified = true;
+    QVERIFY(AudioContracts::decodeSelectionReceipt(
+        receiptPayload, decodedPlan, &receiptStatus, &receiptReason,
+        &receiptChanged, &rollbackAttempted, &rollbackVerified,
+        &contractError));
+    QCOMPARE(receiptStatus, QStringLiteral("AlreadySet"));
+    QVERIFY(receiptReason.isEmpty() && !receiptChanged && !rollbackAttempted &&
+            !rollbackVerified);
+    QJsonObject invalidReceipt =
+        QJsonDocument::fromJson(receiptPayload).object();
+    invalidReceipt.insert(QStringLiteral("hardwareReadback"), true);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        decodedPlan, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    invalidReceipt = QJsonDocument::fromJson(receiptPayload).object();
+    invalidReceipt.insert(QStringLiteral("defaultChanged"), true);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        decodedPlan, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    for (const QString &field :
+         {QStringLiteral("changed"), QStringLiteral("mutationAttempted"),
+          QStringLiteral("rollbackAttempted"),
+          QStringLiteral("profileChanged")}) {
+      invalidReceipt = QJsonDocument::fromJson(receiptPayload).object();
+      invalidReceipt.insert(field, true);
+      QVERIFY(!AudioContracts::decodeSelectionReceipt(
+          QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+          decodedPlan, &receiptStatus, &receiptReason, &receiptChanged,
+          &rollbackAttempted, &rollbackVerified, &contractError));
+    }
+    invalidReceipt = QJsonDocument::fromJson(receiptPayload).object();
+    invalidReceipt.insert(QStringLiteral("verified"), false);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        decodedPlan, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+
+    AudioSelectionPlan changedExpected = decodedPlan;
+    changedExpected.requestedSelection =
+        changedExpected.originalSelection ==
+                QStringLiteral("profile-0000000000000001")
+            ? QStringLiteral("profile-0000000000000002")
+            : QStringLiteral("profile-0000000000000001");
+    changedExpected.changed = true;
+    QJsonObject appliedReceipt =
+        QJsonDocument::fromJson(receiptPayload).object();
+    appliedReceipt.insert(QStringLiteral("status"), QStringLiteral("Applied"));
+    appliedReceipt.insert(QStringLiteral("requestedSelection"),
+                          changedExpected.requestedSelection);
+    appliedReceipt.insert(QStringLiteral("changed"), true);
+    appliedReceipt.insert(QStringLiteral("mutationAttempted"), true);
+    appliedReceipt.insert(QStringLiteral("profileChanged"), true);
+    QVERIFY(AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(appliedReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    QCOMPARE(receiptStatus, QStringLiteral("Applied"));
+    QVERIFY(receiptChanged && !rollbackAttempted && !rollbackVerified);
+    AudioSelectionPlan inconsistentExpected = changedExpected;
+    inconsistentExpected.changed = false;
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(appliedReceipt).toJson(QJsonDocument::Compact),
+        inconsistentExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+
+    QJsonObject failedReceipt = appliedReceipt;
+    failedReceipt.insert(QStringLiteral("status"), QStringLiteral("Failed"));
+    failedReceipt.insert(QStringLiteral("reason"),
+                         QStringLiteral("mutation-failed"));
+    failedReceipt.insert(QStringLiteral("changed"), false);
+    failedReceipt.insert(QStringLiteral("verified"), false);
+    failedReceipt.insert(QStringLiteral("profileChanged"), false);
+    QVERIFY(AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(failedReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    QCOMPARE(receiptStatus, QStringLiteral("Failed"));
+    QCOMPARE(receiptReason, QStringLiteral("mutation-failed"));
+    QVERIFY(!receiptChanged && !rollbackAttempted && !rollbackVerified);
+
+    invalidReceipt = failedReceipt;
+    invalidReceipt.insert(QStringLiteral("mutationAttempted"), false);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    invalidReceipt = failedReceipt;
+    invalidReceipt.insert(QStringLiteral("rollbackVerified"), true);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    invalidReceipt = failedReceipt;
+    invalidReceipt.insert(QStringLiteral("rollbackAttempted"), true);
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    invalidReceipt.insert(QStringLiteral("reason"),
+                          QStringLiteral("rollback-failed"));
+    QVERIFY(AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    QVERIFY(rollbackAttempted && !rollbackVerified);
+    invalidReceipt = failedReceipt;
+    invalidReceipt.insert(QStringLiteral("rollbackAttempted"), true);
+    invalidReceipt.insert(QStringLiteral("rollbackVerified"), true);
+    QVERIFY(AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+    QVERIFY(rollbackAttempted && rollbackVerified);
+    invalidReceipt.insert(QStringLiteral("reason"),
+                          QStringLiteral("verification-unavailable"));
+    QVERIFY(!AudioContracts::decodeSelectionReceipt(
+        QJsonDocument(invalidReceipt).toJson(QJsonDocument::Compact),
+        changedExpected, &receiptStatus, &receiptReason, &receiptChanged,
+        &rollbackAttempted, &rollbackVerified, &contractError));
+
+    QVariantMap hifiProfile;
+    for (const QVariant &entry :
+         card.value(QStringLiteral("profiles")).toList()) {
+      const QVariantMap profile = entry.toMap();
+      if (profile.value(QStringLiteral("label")).toString() ==
+          QStringLiteral("High Fidelity"))
+        hifiProfile = profile;
+    }
+    QVERIFY(!hifiProfile.isEmpty());
+    QVERIFY(qputenv("SYNAPSE_AUDIO_SELECTION_MODE",
+                    QByteArrayLiteral("fail-after-mutate")));
+    QVERIFY(adapter.planAudioProfile(
+        card.value(QStringLiteral("id")).toString(),
+        hifiProfile.value(QStringLiteral("id")).toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(adapter.audioSelectionConfirmationOpen(), 5000);
+    const int operationsBeforeRestoredFailure = operation.size();
+    QVERIFY(adapter.confirmAudioSelection());
+    QTRY_VERIFY_WITH_TIMEOUT(operation.size() > operationsBeforeRestoredFailure,
+                             10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter.audioBusy(), 10000);
+    QCOMPARE(adapter.audioStatusId(), QString());
+    QCOMPARE(adapter.audioErrorId(),
+             QStringLiteral("audio-selection-restored"));
+    card = adapter.audioProfileCards().constFirst().toMap();
+    QCOMPARE(card.value(QStringLiteral("activeProfileLabel")).toString(),
+             QStringLiteral("Pro Audio"));
+    QVERIFY(qunsetenv("SYNAPSE_AUDIO_SELECTION_MODE"));
+  }
+
   void loadAndGuardedMutations() {
     ScopedEnvironment restore;
     AudioFixture fixture;
@@ -1159,7 +1849,7 @@ private slots:
     QVERIFY(!serialized.contains("processName"));
   }
 
-  void controlReceiptExitCodeConsistency() {
+  void controlAndSelectionReceiptExitCodeConsistency() {
     ScopedEnvironment restore;
     AudioFixture fixture;
     QTemporaryDir wrapperDirectory;
@@ -1176,11 +1866,13 @@ private slots:
         "#!/bin/sh\n"
         "set -eu\n"
         "printf '%s\\n' \"$*\" >>\"$SYNAPSE_ADAPTER_WRAPPER_LOG\"\n"
-        "if [ \"${1-} ${2-}\" = 'audio set-volume' ] && "
-        "[ -n \"${SYNAPSE_ADAPTER_OVERRIDE_RESPONSE:-}\" ]; then\n"
-        "  cat \"$SYNAPSE_ADAPTER_OVERRIDE_RESPONSE\"\n"
-        "  exit \"$SYNAPSE_ADAPTER_OVERRIDE_EXIT\"\n"
-        "fi\n"
+        "case \"${1-} ${2-}\" in\n"
+        "  'audio set-volume'|'audio set-profile')\n"
+        "    if [ -n \"${SYNAPSE_ADAPTER_OVERRIDE_RESPONSE:-}\" ]; then\n"
+        "      cat \"$SYNAPSE_ADAPTER_OVERRIDE_RESPONSE\"\n"
+        "      exit \"$SYNAPSE_ADAPTER_OVERRIDE_EXIT\"\n"
+        "    fi ;;\n"
+        "esac\n"
         "exec \"$SYNAPSE_ADAPTER_REAL_BACKEND\" \"$@\"\n");
     QVERIFY(writeFile(wrapper, wrapperScript,
                       QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
@@ -1266,16 +1958,114 @@ private slots:
                           false, false),
                   0, QStringLiteral("contract-invalid"));
 
+    const QVariantMap card = adapter.audioProfileCards().constFirst().toMap();
+    QVariantMap requestedProfile;
+    for (const QVariant &entry :
+         card.value(QStringLiteral("profiles")).toList()) {
+      const QVariantMap profile = entry.toMap();
+      if (profile.value(QStringLiteral("label")).toString() ==
+          QStringLiteral("Pro Audio"))
+        requestedProfile = profile;
+    }
+    QVERIFY(!requestedProfile.isEmpty());
+    const QString cardId = card.value(QStringLiteral("id")).toString();
+    const QString originalProfile =
+        card.value(QStringLiteral("activeProfile")).toString();
+    const QString requestedProfileId =
+        requestedProfile.value(QStringLiteral("id")).toString();
+    const auto selectionReceipt = [&](const QString &status,
+                                      const QString &reason, bool changed,
+                                      bool mutationAttempted, bool verified,
+                                      bool rollbackAttempted,
+                                      bool rollbackVerified) {
+      QJsonObject value{
+          {QStringLiteral("schema"),
+           QStringLiteral("synapse.settings.audio-profile-port-receipt/v1")},
+          {QStringLiteral("status"), status},
+          {QStringLiteral("reason"), reason.isEmpty()
+                                         ? QJsonValue(QJsonValue::Null)
+                                         : QJsonValue(reason)},
+          {QStringLiteral("selection"), QStringLiteral("profile")},
+          {QStringLiteral("target"), cardId},
+          {QStringLiteral("targetType"), QStringLiteral("card")},
+          {QStringLiteral("originalSelection"), originalProfile},
+          {QStringLiteral("requestedSelection"), requestedProfileId},
+          {QStringLiteral("changed"), changed},
+          {QStringLiteral("mutationAttempted"), mutationAttempted},
+          {QStringLiteral("verified"), verified},
+          {QStringLiteral("rollbackAttempted"), rollbackAttempted},
+          {QStringLiteral("rollbackVerified"), rollbackVerified},
+          {QStringLiteral("profileChanged"), changed},
+          {QStringLiteral("portChanged"), false},
+          {QStringLiteral("stateAuthority"),
+           QStringLiteral("pipewire-pulse-model")},
+          {QStringLiteral("requiresAcknowledgement"),
+           QStringLiteral("synapse-settings/audio-profile-port/v1")},
+          {QStringLiteral("singleTarget"), true},
+          {QStringLiteral("graphMayChange"), true},
+          {QStringLiteral("signalPathMayChange"), true},
+          {QStringLiteral("playbackStarted"), false},
+          {QStringLiteral("captureStarted"), false},
+          {QStringLiteral("defaultChanged"), false},
+          {QStringLiteral("policyChanged"), false},
+          {QStringLiteral("audibilityVerified"), false},
+          {QStringLiteral("hardwareReadback"), false},
+          {QStringLiteral("hardwareExactRollback"), false},
+          {QStringLiteral("bounded"), true},
+      };
+      return QJsonDocument(value).toJson(QJsonDocument::Compact) + '\n';
+    };
+    const auto applySelectionOverride = [&](const QByteArray &payload,
+                                            int exitCode,
+                                            const QString &expectedError) {
+      QVERIFY(writeFile(response, payload));
+      qputenv("SYNAPSE_ADAPTER_OVERRIDE_RESPONSE", response.toUtf8());
+      qputenv("SYNAPSE_ADAPTER_OVERRIDE_EXIT", QByteArray::number(exitCode));
+      QVERIFY(adapter.planAudioProfile(cardId, requestedProfileId));
+      QTRY_VERIFY_WITH_TIMEOUT(adapter.audioSelectionConfirmationOpen(), 5000);
+      QVERIFY(adapter.confirmAudioSelection());
+      QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(), expectedError, 15000);
+      QVERIFY(!adapter.audioBusy());
+      QCOMPARE(adapter.audioProfileCards()
+                   .constFirst()
+                   .toMap()
+                   .value(QStringLiteral("activeProfile"))
+                   .toString(),
+               originalProfile);
+    };
+    applySelectionOverride(selectionReceipt(QStringLiteral("Applied"),
+                                            QString(), true, true, true, false,
+                                            false),
+                           1, QStringLiteral("contract-invalid"));
+    applySelectionOverride(
+        selectionReceipt(QStringLiteral("Refused"),
+                         QStringLiteral("selection-cohort-changed"), false,
+                         false, false, false, false),
+        1, QStringLiteral("audio-selection-refused"));
+    applySelectionOverride(selectionReceipt(QStringLiteral("Failed"),
+                                            QStringLiteral("mutation-failed"),
+                                            false, true, false, true, true),
+                           1, QStringLiteral("audio-selection-restored"));
+    applySelectionOverride(selectionReceipt(QStringLiteral("Failed"),
+                                            QStringLiteral("mutation-failed"),
+                                            false, true, false, false, false),
+                           0, QStringLiteral("contract-invalid"));
+
     QFile argvLog(log);
     QVERIFY(argvLog.open(QIODevice::ReadOnly));
-    int applyCount = 0;
-    for (const QByteArray &line : argvLog.readAll().split('\n'))
+    int controlApplyCount = 0;
+    int selectionApplyCount = 0;
+    for (const QByteArray &line : argvLog.readAll().split('\n')) {
       if (line.startsWith("audio set-volume "))
-        applyCount++;
-    QCOMPARE(applyCount, 4);
+        controlApplyCount++;
+      if (line.startsWith("audio set-profile "))
+        selectionApplyCount++;
+    }
+    QCOMPARE(controlApplyCount, 4);
+    QCOMPARE(selectionApplyCount, 4);
   }
 
-  void applyTransportFailureRefreshesSnapshot() {
+  void applyDeadlineAllowsBoundedInnerTimeoutAndRefreshesSnapshot() {
     ScopedEnvironment restore;
     AudioFixture fixture;
     QVERIFY(fixture.valid());
@@ -1302,7 +2092,8 @@ private slots:
                                .toString();
     qputenv("SYNAPSE_AUDIO_MOVE_MODE", QByteArrayLiteral("timeout"));
     QVERIFY(adapter.moveAudioStream(stream, original, requested));
-    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(), QStringLiteral("timeout"),
+    QTRY_COMPARE_WITH_TIMEOUT(adapter.audioErrorId(),
+                              QStringLiteral("audio-stream-move-failed"),
                               10000);
     QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 2, 10000);
     QCOMPARE(loaded.constLast().constFirst().toBool(), true);
@@ -1346,6 +2137,99 @@ private slots:
     QVERIFY(!adapter.removeAudioRouteRule(QStringLiteral("rule-9999")));
   }
 
+  void completionCallbackMayDestroyAdapter() {
+    ScopedEnvironment restore;
+    AudioFixture fixture;
+    QVERIFY(fixture.valid());
+    fixture.activate();
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      connect(adapter.data(), &AudioAdapter::audioStateChanged, this,
+              [&adapter]() { delete adapter.data(); });
+      QVERIFY(!adapter->loadAudio());
+      QVERIFY(adapter.isNull());
+    }
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      QVERIFY(!adapter->planAudioPort(QStringLiteral("invalid"),
+                                      QStringLiteral("device"),
+                                      QStringLiteral("port")));
+      connect(adapter.data(), &AudioAdapter::audioOperationStateChanged, this,
+              [&adapter]() { delete adapter.data(); });
+      QVERIFY(!adapter->loadAudio());
+      QVERIFY(adapter.isNull());
+    }
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      connect(adapter.data(), &AudioAdapter::audioModelsChanged, this,
+              [&adapter]() { delete adapter.data(); });
+      QVERIFY(adapter->loadAudio());
+      QTRY_VERIFY_WITH_TIMEOUT(adapter.isNull(), 10000);
+    }
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      connect(adapter.data(), &AudioAdapter::audioLoaded, this,
+              [&adapter](bool) { delete adapter.data(); });
+      QVERIFY(adapter->loadAudio());
+      QTRY_VERIFY_WITH_TIMEOUT(adapter.isNull(), 10000);
+    }
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      QSignalSpy loaded(adapter.data(), &AudioAdapter::audioLoaded);
+      QVERIFY(adapter->loadAudio());
+      QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 10000);
+      const QVariantMap card =
+          adapter->audioProfileCards().constFirst().toMap();
+      const QString active =
+          card.value(QStringLiteral("activeProfile")).toString();
+      QString requested;
+      for (const QVariant &entry :
+           card.value(QStringLiteral("profiles")).toList()) {
+        const QVariantMap profile = entry.toMap();
+        if (profile.value(QStringLiteral("id")).toString() != active &&
+            profile.value(QStringLiteral("availability")).toString() !=
+                QStringLiteral("unavailable")) {
+          requested = profile.value(QStringLiteral("id")).toString();
+          break;
+        }
+      }
+      QVERIFY(!requested.isEmpty());
+      connect(adapter.data(), &AudioAdapter::audioSelectionChanged, this,
+              [&adapter]() { delete adapter.data(); });
+      QVERIFY(adapter->planAudioProfile(
+          card.value(QStringLiteral("id")).toString(), requested));
+      QTRY_VERIFY_WITH_TIMEOUT(adapter.isNull(), 5000);
+    }
+
+    {
+      QPointer<AudioAdapter> adapter = new AudioAdapter(
+          testBackend(), [](const QString &) { return QString(); }, 5000);
+      QSignalSpy loaded(adapter.data(), &AudioAdapter::audioLoaded);
+      QVERIFY(adapter->loadAudio());
+      QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 10000);
+      const QString output = adapter->audioOutputs()
+                                 .constFirst()
+                                 .toMap()
+                                 .value(QStringLiteral("id"))
+                                 .toString();
+      connect(adapter.data(), &AudioAdapter::audioProcessChoiceChanged, this,
+              [&adapter]() { delete adapter.data(); });
+      QVERIFY(
+          !adapter->chooseAudioProcessRule(QStringLiteral("output"), output));
+      QVERIFY(adapter.isNull());
+    }
+  }
+
   void commandOutputIsBounded() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -1365,11 +2249,40 @@ private slots:
     QVERIFY(!adapter.audioBusy());
   }
 
+  void commandFailureKillsProcessGroup() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString backend =
+        directory.filePath(QStringLiteral("failing-backend"));
+    const QString survivor =
+        directory.filePath(QStringLiteral("failure-descendant-survived"));
+    const QByteArray script =
+        QByteArrayLiteral("#!/bin/sh\n(sleep 1; : > '") + survivor.toUtf8() +
+        QByteArrayLiteral("') </dev/null >/dev/null 2>&1 &\nexit 65\n");
+    QVERIFY(writeFile(backend, script,
+                      QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    AudioAdapter adapter(
+        backend, [](const QString &) { return QString(); }, 3000);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 3000);
+    QCOMPARE(loaded.constFirst().constFirst().toBool(), false);
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("backend-failed"));
+    QVERIFY(!adapter.audioBusy());
+    QTest::qWait(1200);
+    QVERIFY(!QFileInfo::exists(survivor));
+  }
+
   void commandTimeoutIsBounded() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString backend = directory.filePath(QStringLiteral("slow-backend"));
-    QVERIFY(writeFile(backend, QByteArrayLiteral("#!/bin/sh\nsleep 5\n"),
+    const QString survivor =
+        directory.filePath(QStringLiteral("descendant-survived"));
+    const QByteArray script = QByteArrayLiteral("#!/bin/sh\n(sleep 1; : > '") +
+                              survivor.toUtf8() +
+                              QByteArrayLiteral("') &\nwait\n");
+    QVERIFY(writeFile(backend, script,
                       QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
     AudioAdapter adapter(
         backend, [](const QString &) { return QString(); }, 100);
@@ -1379,6 +2292,8 @@ private slots:
     QCOMPARE(loaded.constFirst().constFirst().toBool(), false);
     QCOMPARE(adapter.audioErrorId(), QStringLiteral("timeout"));
     QVERIFY(!adapter.audioBusy());
+    QTest::qWait(1200);
+    QVERIFY(!QFileInfo::exists(survivor));
   }
 
 private:

@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.0.0-alpha.1
+
+- Add a separate bounded `audio profile-port-inventory` capability for card
+  profiles and physical endpoint ports, using owner-scoped opaque profile and
+  port tokens and typed `available`, `unknown` or `unavailable` choices.
+- Decode PulseAudio 17's emitted shapes exactly: object-keyed card profiles with
+  optional boolean availability, and sink/source port arrays whose optional
+  fixed-C-locale availability strings are strictly normalized to the public
+  three-state vocabulary.
+- Advance the base Audio inventory to v2 so a card's active profile is an opaque
+  token rather than a raw PipeWire-Pulse profile name.
+- Add read-only `plan-profile` and `plan-port` contracts plus separately
+  acknowledged `set-profile` and `set-port` transactions for exactly one card,
+  output or input target.
+- Bind every plan to target identity, backend index, exact original/requested
+  selections and availability with an opaque cohort; repeat preflight twice and
+  refuse stale, cross-owner, unavailable or changed state before mutation.
+- Execute at most one fixed `set-card-profile`, `set-sink-port` or
+  `set-source-port` request, require fresh software-model verification, never
+  retry an uncertain requested mutation and compensate only after a fresh
+  same-identity, unchanged-observation proof.
+- Do not overwrite external restoration or an intervening third state, and do
+  not compensate to a choice that became unavailable; report exact verified
+  restoration or failed/unavailable rollback honestly.
+- Add a strict Qt boundary, atomic base/profile-port/policy/broker/GoXLR
+  publication, localized profile and port selectors, localized generic text for
+  missing labels, and an explicit signal-path confirmation that keeps cohorts,
+  acknowledgements and raw names out of QML.
+- Reject invalid UTF-8, raw or escaped NUL, malformed JSON grammar, unpaired
+  surrogates, duplicate decoded keys, trailing data and excessive depth/key
+  counts before `json-c`, while accepting exact configured bounds.
+- Reject malformed present mute, volume and stream-property fields, bound every
+  channel value through `UINT32_MAX` with overflow-safe aggregation, and treat
+  an empty default name as no named default while rejecting invalid nonempty
+  defaults.
+- Run fixed-argv backend children in dedicated process groups with null standard
+  input/error, parent-death `SIGKILL` and whole-group termination on setup,
+  timeout, capture failure or non-success; keep descriptor setup valid with
+  closed inherited standard streams, bound Qt child output incrementally and
+  use bounded transaction-aware outer deadlines for multi-capture apply paths.
+- Count excluded monitor sources within the raw input bound and fully validate
+  their identities, indexes, metadata, labels, ports, availability and active
+  selections, including global port budgets, before omission.
+- Add strict Draft 2020-12 inventory, plan and receipt schemas; bounded,
+  malformed, duplicate, cross-owner, race, timeout, verification and
+  compensation fixtures; adapter tests; and QML tests.
+- Embed and validate all 64 pinned GUI locale catalogues, retain complete
+  `en_US`/`it_IT` coverage, mark the other 62 catalogues as explicit unfinished
+  source-English alpha fallbacks, reject malformed locale requests, and render
+  recognized RTL layout mirroring without claiming translated coverage.
+- Require profile/port receipt status to agree with the child exit code, and
+  normalize relative generated-source build paths so production GUI and QML
+  module binaries reproduce across distinct build directories.
+- State explicitly that profiles may rebuild the software graph and ports may
+  change a signal path, while no transaction starts playback/capture, changes a
+  default or durable policy, proves audibility, reads hardware state or claims
+  exact hardware rollback.
+- Keep the candidate source-only: no installation, package promotion, live
+  profile/port mutation, playback, capture, provider startup or deployment is
+  performed.
+
 ## 0.9.0-alpha.1
 
 - Add `audio goxlr-status` as a bounded read-only bridge to the fixed production

@@ -1,18 +1,22 @@
 # Synapse Settings
 
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 9 adds bounded, read-only GoXLR provider
-presence and capability status after the existing inventory, policy and broker
-cohort. The `Synapse.Settings.Audio` module keeps PipeWire and provider
-authority, raw identities, private cohorts, acknowledgements and rollback in
-C11/Qt boundaries rather than QML. It exposes no GoXLR mutation operation and
-never represents the provider profile model as hardware readback. Installation,
-shell replacement, provider or broker activation, live mutation and physical
+new-stream Audio route broker. Alpha 10 adds bounded, separately planned and
+acknowledged card-profile and endpoint-port selection after the established
+inventory, policy, broker and read-only GoXLR capabilities. The
+`Synapse.Settings.Audio` module keeps PipeWire and provider authority, raw
+identities, private cohorts, acknowledgements and rollback in C11/Qt boundaries
+rather than QML. It exposes no GoXLR mutation operation and never represents a
+software or provider model as hardware readback. Installation, shell
+replacement, provider or broker activation, live mutation and physical
 qualification remain later deployment gates.
 
 ```bash
 make CORE_ROOT=/path/to/staged-core clean all test-all
 build/synapse-settings audio inventory --format json
+build/synapse-settings audio profile-port-inventory --format json
+build/synapse-settings audio plan-profile --card CARD_ID --profile PROFILE_ID --format json
+build/synapse-settings audio plan-port --direction output --device OUTPUT_ID --port PORT_ID --format json
 build/synapse-settings audio broker-status --format json
 build/synapse-settings audio goxlr-status --format json
 build/synapse-settings audio plan-stream-move --stream PLAYBACK_ID --device OUTPUT_ID --format json
@@ -34,8 +38,17 @@ or activate anything.
 Audio capabilities in this slice:
 
 - bounded PipeWire-Pulse outputs, physical inputs, cards and active streams;
-- stable opaque endpoint and stream identities;
+- stable opaque endpoint, card, profile, port and stream identities;
 - guarded, planned and verified default output/input selection;
+- a separate bounded card-profile and physical endpoint-port inventory with
+  owner-scoped tokens, bounded labels, localized generic presentation for
+  missing labels and typed choice availability;
+- one-target profile/port planning, explicit confirmation, exact
+  acknowledgement, double preflight, software-model postflight and guarded
+  exact-original compensation;
+- profile plans that honestly allow graph and signal-path changes, and port
+  plans that allow only a selected signal-path change, without playback,
+  capture, default, policy or audibility claims;
 - one-target device/stream volume and mute planning, exact acknowledgement,
   postflight verification and identity-safe exact-original compensation;
 - requested volume bounded to 0–100% with no software amplification, implicit
@@ -47,8 +60,9 @@ Audio capabilities in this slice:
   the current system default;
 - native executable/directory chooser owned by the trusted Qt adapter;
 - lazy standalone QML host and reusable `Synapse.Settings.Audio` module with
-  provisional `en_US` and `it_IT` catalogues and deterministic `en_US`
-  fallback;
+  all 64 pinned GUI locale catalogues, complete `en_US`/`it_IT` coverage,
+  explicit unfinished `en_US` fallback entries for the other 62 alpha
+  catalogues, deterministic unknown-locale fallback and RTL layout projection;
 - a bounded broker for new playback and recording streams created after its
   startup baseline;
 - typed broker status and per-event receipts with no PID, executable path or raw
@@ -63,8 +77,8 @@ Audio capabilities in this slice:
 - a separate, one-stream existing-stream plan and exact-acknowledgement move with
   same-identity postflight and exact-original rollback when safe;
 - an explicit Qt confirmation surface that never creates a durable rule;
-- strict contract decoding, bounded output, bounded execution and single-flight
-  GUI operations;
+- strict UTF-8/JSON and contract decoding, bounded output, bounded execution,
+  whole-process-group termination and single-flight GUI operations;
 - a shell-facing `AudioShellHost` that publishes only bounded typed booleans and
   reason/status identifiers, never raw JSON, process paths, endpoint internals,
   acknowledgements, cohorts, argv or environments.
@@ -88,12 +102,14 @@ preflight, and returns a dedicated receipt. No persistent rule is created.
 it. The current source candidate and QML module were not installed, enabled or
 run against live Audio or a live GoXLR provider. Existing-stream movement and
 level-control transactions were exercised only through the compile-time test
-`pactl` override; no live
-stream, volume or mute state was changed. Fixtures cover device and stream
-controls, playback and recording moves, typed preflight refusal, stale cohorts,
-wrong originals, endpoint drift, timeout, false backend success, target or
-identity loss, unavailable verification, amplified pre-state restoration,
-external restoration, intervening values, verified rollback and failed rollback.
+`pactl` override; no live stream, volume, mute, profile or port state was
+changed. Fixtures cover device and stream controls, playback and recording
+moves, card profiles, output/input ports, typed availability, owner separation,
+preflight refusal, stale cohorts, wrong originals, target drift, malformed and
+bounded inventories, timeout, false backend success, target or identity loss,
+unavailable verification or restoration, external restoration, immediate and
+intervening third values, verified rollback, failed rollback, exact aggregate
+limits and parent/descendant process termination.
 Policy receipts still describe policy
 persistence only and therefore continue to report `routingApplied=false`.
 Settings obtains broker runtime state through

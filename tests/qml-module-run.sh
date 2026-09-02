@@ -10,15 +10,15 @@ trap 'rm -rf "$work"' EXIT
 install -d -m 0755 "$work/audio" "$work/config" "$work/cache"
 install -d -m 0700 "$work/runtime"
 cat >"$work/audio/sinks.json" <<'JSON'
-[{"index":10,"name":"sink.a","description":"Integrated audio","mute":false,"volume":{"left":{"value":32768}}}]
+[{"index":10,"name":"sink.a","description":"Integrated audio","mute":false,"volume":{"left":{"value":32768}},"active_port":"port.speaker","ports":[{"name":"port.speaker","description":"Speakers","availability":"available"},{"name":"port.headphones","description":"Headphones","availability":"availability unknown"}]}]
 JSON
 cat >"$work/audio/sources.json" <<'JSON'
-[{"index":20,"name":"source.a","description":"Built-in microphone","monitor_of_sink":null,"monitor_source":"","mute":false,"volume":{"mono":{"value":32768}}},{"index":21,"name":"sink.a.monitor","description":"Monitor","monitor_of_sink":null,"monitor_source":"sink.a","mute":false,"volume":{"mono":{"value":65536}}}]
+[{"index":20,"name":"source.a","description":"Built-in microphone","monitor_of_sink":null,"monitor_source":"","mute":false,"volume":{"mono":{"value":32768}},"active_port":"port.mic","ports":[{"name":"port.mic","description":"Microphone","availability":"available"}]},{"index":21,"name":"sink.a.monitor","description":"Monitor","monitor_of_sink":null,"monitor_source":"sink.a","mute":false,"volume":{"mono":{"value":65536}},"active_port":null,"ports":[]}]
 JSON
 printf '[]\n' >"$work/audio/sink-inputs.json"
 printf '[]\n' >"$work/audio/source-outputs.json"
 cat >"$work/audio/cards.json" <<'JSON'
-[{"index":40,"name":"card.a","description":"Primary audio card","active_profile":"HiFi"}]
+[{"index":40,"name":"card.a","description":"Primary audio card","active_profile":"profile.hifi","profiles":{"profile.hifi":{"description":"High Fidelity","available":true},"profile.pro":{"description":"Pro Audio"}}}]
 JSON
 printf 'sink.a\n' >"$work/audio/default-sink"
 printf 'source.a\n' >"$work/audio/default-source"

@@ -168,6 +168,91 @@ text and explicitly states that it cannot start the provider or mutate hardware.
 All provider responses in this increment came from compile-time fixture paths;
 no live provider or hardware was queried.
 
+## Alpha 10 guarded card profiles and endpoint ports
+
+Profiles and ports remain separate from default selection, durable routing,
+existing-stream movement and `audio-control/v1`. The read-only
+`audio profile-port-inventory` command publishes bounded cards and physical
+output/input endpoints with owner-scoped opaque profile or port choices. C11
+keeps raw PipeWire-Pulse card, endpoint, profile and port names inside C11. The
+Qt projection contains only opaque tokens, labels bounded to 255 UTF-8 bytes and
+the typed availability `available`, `unknown` or `unavailable`. Unknown choices
+are selectable; unavailable choices are not. PulseAudio 17 card `profiles` are
+accepted only in their emitted object form, with an optional boolean
+`available`. Sink/source `ports` are accepted only as arrays of objects with a
+bounded `name`; their optional C-locale `availability` value must be exactly
+`available`, `availability unknown` or `not available` and is normalized to the
+public three-state vocabulary. Omitted collections advertise no choices;
+present null or wrong-shaped collections and present null availability fail
+closed. Labels are presentation data and never bind identity or a cohort.
+Missing labels remain empty in typed contracts; QML uses localized `Audio card`,
+`Audio endpoint`, `Unnamed profile` or `Unnamed port` display text without
+exposing a raw backend identity. Monitor entries
+count toward the 64-item raw input bound; C11 validates their raw identity,
+backend index, monitor metadata, label, complete ports and active selection
+before omission. Hidden options consume the global 512-port budget, and
+malformed choices, availability, duplicate indexes or generated tokens fail
+closed before the physical-input projection is published.
+
+`audio plan-profile` accepts one `card-…` and owner-compatible `profile-…` token.
+`audio plan-port` accepts one direction-compatible `output-…` or `input-…` and
+owner-compatible `port-…` token. A target must have a resolvable active choice.
+The plan exposes bounded target/original/requested labels and an opaque
+`selection-…` cohort while retaining the raw target, backend index and choices
+in C11. A profile plan reports that the software graph and signal path may
+change. A port plan reports that only the selected signal path may change.
+
+Apply requires the exact original selection, requested selection, cohort and
+`synapse-settings/audio-profile-port/v1`. C11 loads and validates the bound state
+twice before executing at most one fixed `set-card-profile`, `set-sink-port` or
+`set-source-port` command. It refuses stale originals, cohorts, identities,
+owners, directions, missing active choices and unavailable requested choices
+before mutation. A same-selection apply returns a verified `AlreadySet` receipt
+without a setter.
+
+A setter exit alone is never success. Fresh state must prove the same target
+identity and exact requested choice. An uncertain requested mutation is never
+retried. Compensation is considered only if the first postflight visibly
+observed the requested choice without establishing a successful transaction;
+immediately before at most one exact-original setter, C11 must freshly prove the
+same identity and that the requested choice is still selected. It does not
+overwrite an external restoration, an immediate or intervening third choice, or
+an original choice that became unavailable. Restoration must be verified;
+otherwise the receipt remains `Failed` and reports whether rollback was
+attempted and verified.
+
+Inventory, plans and receipts fix
+`stateAuthority=pipewire-pulse-model`, `hardwareReadback=false` and
+`hardwareExactRollback=false`. They never start playback or capture, change a
+default or durable policy, or claim audibility. The Qt adapter independently
+validates the contracts and active-selection agreement with base Audio
+inventory, owns acknowledgement/cohort/apply construction, and refreshes the
+complete base/profile-port/policy/broker/GoXLR cohort after every apply outcome.
+QML receives only bounded models and confirmation labels; it receives no raw
+names, cohort, acknowledgement or command authority. All Alpha 10 transactions
+were exercised through compile-time fixtures only.
+
+Before `json-c` decoding, C11 validates the complete raw `pactl` document as
+strict UTF-8 JSON. Raw or escaped NUL, malformed escapes, unpaired surrogates,
+invalid literals or number grammar, leading-zero numbers, trailing commas or
+data, duplicate decoded keys, nesting over 64, over 4096 keys in one object,
+over 16384 keys in one document, and byte 1 MiB + 1 fail closed. Valid surrogate
+pairs and the exact depth, key and byte limits remain accepted. The Qt adapter
+independently performs strict lexical JSON and UTF-8 validation before any Qt
+JSON decoding, in addition to exact typed contract and cross-field checks.
+
+Base inventory decoding also requires exact nonnegative backend indexes through
+`INT_MAX`. Present mute and volume fields must have their expected types;
+channel values are exact integers through `UINT32_MAX` and aggregate with
+checked arithmetic before rounding. Present stream `properties` must be an
+object, and present `application.name` and `media.name` values must be bounded
+strings. Missing optional values retain defined fallbacks, while a malformed
+process-ID property disables process-rule selection. Default sink/source values
+remain opaque bounded identities: an empty value means no named default, and an
+invalid nonempty value clears the entire inventory. The Qt outer process remains
+bounded while applying transaction-specific deadlines for commands that can
+legitimately execute several sequential two-second capture cohorts.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -216,9 +301,9 @@ its production constructor uses only `/usr/bin/synapse-settings`. The module's
 typed reason/status/error properties while rendering the same
 `AudioSettings.qml` presentation.
 
-The shell controls one explicit `active` property. In Alpha 9, activating the
-module starts only the established read-only inventory, policy view,
-broker-status and GoXLR-status cohort.
+The shell controls one explicit `active` property. In Alpha 10, activating the
+module starts only the established read-only base inventory, profile/port
+inventory, policy view, broker-status and GoXLR-status cohort.
 Mutations remain behind the same visible confirmations and adapter-owned plan,
 acknowledgement, receipt validation and complete refresh. Neither loading the
 module nor selecting the Audio section changes a default, policy, stream,
@@ -238,10 +323,10 @@ remain separate gates.
 
 ## Remaining Audio work
 
-Balance, profiles and ports, level metering, safe playback tests, Bluetooth
-state, hotplug and GoXLR hardware control remain separate capabilities. Alpha 9
-presence/status observation and Alpha 8 volume/mute authority never imply any of
-them. A safe sample never authorizes capture, profile import or GoXLR
-firmware/mixer mutation.
+Balance, level metering, safe playback tests, Bluetooth state, hotplug and
+GoXLR hardware control remain separate capabilities. Alpha 10 profile/port
+selection, Alpha 9 presence/status observation and Alpha 8 volume/mute authority
+never imply any of them. A safe sample never authorizes capture, profile import
+or GoXLR firmware/mixer mutation.
 The existing Quickshell `AudioPanel.qml` direct mutation model must not be reused
 inside Settings.

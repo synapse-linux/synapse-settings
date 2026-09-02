@@ -18,6 +18,11 @@ struct AudioPresentationSnapshot {
   QVariantList inputs;
   QVariantList streams;
   QVariantList cards;
+  bool profilePortAvailable = false;
+  bool profilePortMutationAvailable = false;
+  QString profilePortReason;
+  QVariantList profileCards;
+  QVariantList portEndpoints;
   QVariantList routeRules;
   bool routeBrokerAvailable = false;
   bool routeBrokerActive = false;
@@ -30,10 +35,27 @@ struct AudioPresentationSnapshot {
   QVariantList goxlrDevices;
 };
 
+struct AudioSelectionPlan {
+  QString selection;
+  QString target;
+  QString targetType;
+  QString targetLabel;
+  QString originalSelection;
+  QString originalLabel;
+  QString requestedSelection;
+  QString requestedLabel;
+  QString requestedAvailability;
+  QString cohort;
+  bool changed = false;
+};
+
 namespace AudioContracts {
 
 bool decodeInventory(const QByteArray &payload,
                      AudioPresentationSnapshot *snapshot, QString *errorId);
+bool decodeProfilePortInventory(const QByteArray &payload,
+                                AudioPresentationSnapshot *snapshot,
+                                QString *errorId);
 bool decodePolicy(const QByteArray &payload,
                   AudioPresentationSnapshot *snapshot, QString *errorId);
 bool decodeBrokerStatus(const QByteArray &payload,
@@ -78,6 +100,14 @@ bool decodeRouteReceipt(const QByteArray &payload,
                         const QString &expectedDevice,
                         const QString &expectedRule, QString *resultRule,
                         bool *changed, QString *errorId);
+bool decodeSelectionPlan(const QByteArray &payload,
+                         const AudioSelectionPlan &expected,
+                         AudioSelectionPlan *decoded, QString *errorId);
+bool decodeSelectionReceipt(const QByteArray &payload,
+                            const AudioSelectionPlan &expected, QString *status,
+                            QString *reason, bool *changed,
+                            bool *rollbackAttempted, bool *rollbackVerified,
+                            QString *errorId);
 
 } // namespace AudioContracts
 
@@ -95,6 +125,16 @@ class AudioAdapter final : public QObject {
   Q_PROPERTY(
       QVariantList audioStreams READ audioStreams NOTIFY audioModelsChanged)
   Q_PROPERTY(QVariantList audioCards READ audioCards NOTIFY audioModelsChanged)
+  Q_PROPERTY(bool audioProfilePortAvailable READ audioProfilePortAvailable
+                 NOTIFY audioModelsChanged)
+  Q_PROPERTY(bool audioProfilePortMutationAvailable READ
+                 audioProfilePortMutationAvailable NOTIFY audioModelsChanged)
+  Q_PROPERTY(QString audioProfilePortReason READ audioProfilePortReason NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(QVariantList audioProfileCards READ audioProfileCards NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(QVariantList audioPortEndpoints READ audioPortEndpoints NOTIFY
+                 audioModelsChanged)
   Q_PROPERTY(QVariantList audioRouteRules READ audioRouteRules NOTIFY
                  audioModelsChanged)
   Q_PROPERTY(bool audioRouteBrokerAvailable READ audioRouteBrokerAvailable
@@ -119,6 +159,16 @@ class AudioAdapter final : public QObject {
                  audioProcessChoiceChanged)
   Q_PROPERTY(bool audioProcessChoiceOpen READ audioProcessChoiceOpen NOTIFY
                  audioProcessChoiceChanged)
+  Q_PROPERTY(bool audioSelectionConfirmationOpen READ
+                 audioSelectionConfirmationOpen NOTIFY audioSelectionChanged)
+  Q_PROPERTY(QString audioSelectionKind READ audioSelectionKind NOTIFY
+                 audioSelectionChanged)
+  Q_PROPERTY(QString audioSelectionTargetLabel READ audioSelectionTargetLabel
+                 NOTIFY audioSelectionChanged)
+  Q_PROPERTY(QString audioSelectionOriginalLabel READ
+                 audioSelectionOriginalLabel NOTIFY audioSelectionChanged)
+  Q_PROPERTY(QString audioSelectionRequestedLabel READ
+                 audioSelectionRequestedLabel NOTIFY audioSelectionChanged)
   Q_PROPERTY(QString audioStatusId READ audioStatusId NOTIFY
                  audioOperationStateChanged)
   Q_PROPERTY(
@@ -141,6 +191,11 @@ public:
   QVariantList audioInputs() const;
   QVariantList audioStreams() const;
   QVariantList audioCards() const;
+  bool audioProfilePortAvailable() const;
+  bool audioProfilePortMutationAvailable() const;
+  QString audioProfilePortReason() const;
+  QVariantList audioProfileCards() const;
+  QVariantList audioPortEndpoints() const;
   QVariantList audioRouteRules() const;
   bool audioRouteBrokerAvailable() const;
   bool audioRouteBrokerActive() const;
@@ -153,6 +208,11 @@ public:
   QVariantList audioGoxlrDevices() const;
   QVariantList audioProcessChoices() const;
   bool audioProcessChoiceOpen() const;
+  bool audioSelectionConfirmationOpen() const;
+  QString audioSelectionKind() const;
+  QString audioSelectionTargetLabel() const;
+  QString audioSelectionOriginalLabel() const;
+  QString audioSelectionRequestedLabel() const;
   QString audioStatusId() const;
   QString audioErrorId() const;
 
@@ -164,6 +224,13 @@ public:
                                    const QString &requestedDeviceId);
   Q_INVOKABLE bool setAudioVolume(const QString &targetId, int percent);
   Q_INVOKABLE bool setAudioMuted(const QString &targetId, bool muted);
+  Q_INVOKABLE bool planAudioProfile(const QString &cardId,
+                                    const QString &profileId);
+  Q_INVOKABLE bool planAudioPort(const QString &direction,
+                                 const QString &deviceId,
+                                 const QString &portId);
+  Q_INVOKABLE bool confirmAudioSelection();
+  Q_INVOKABLE void cancelAudioSelection();
   Q_INVOKABLE bool chooseAudioProcessRule(const QString &direction,
                                           const QString &deviceId);
   Q_INVOKABLE bool confirmAudioProcessRule(const QString &streamId);
@@ -179,8 +246,10 @@ signals:
   void audioStateChanged();
   void audioModelsChanged();
   void audioProcessChoiceChanged();
+  void audioSelectionChanged();
   void audioOperationStateChanged();
   void audioProcessChoiceRequested();
+  void audioSelectionConfirmationRequested();
   void audioLoaded(bool success);
   void audioOperationFinished(const QString &statusId);
 
@@ -189,9 +258,13 @@ private:
 
   bool startCommand(
       const QStringList &arguments, int outputLimit,
-      std::function<void(int, const QByteArray &, const QString &)> callback);
+      std::function<void(int, const QByteArray &, const QString &)> callback,
+      int timeoutScale = 1);
   void startInventoryLoad(const QString &successStatusId,
                           const QString &operationErrorId = QString());
+  void startProfilePortLoad(AudioPresentationSnapshot snapshot,
+                            const QString &successStatusId,
+                            const QString &operationErrorId);
   void startPolicyLoad(AudioPresentationSnapshot snapshot,
                        const QString &successStatusId,
                        const QString &operationErrorId);
@@ -216,6 +289,17 @@ private:
   QVariantMap audioControlTarget(const QString &targetId) const;
   bool startAudioControl(const QString &targetId, const QString &control,
                          const QVariant &requestedValue);
+  QVariantMap audioSelectionTarget(const QString &selection,
+                                   const QString &targetType,
+                                   const QString &targetId) const;
+  QVariantMap audioSelectionOption(const QVariantMap &target,
+                                   const QString &selection,
+                                   const QString &selectionId) const;
+  bool startAudioSelectionPlan(const QString &selection,
+                               const QString &targetType,
+                               const QString &targetId,
+                               const QString &selectionId);
+  void clearAudioSelection();
   bool validRule(const QString &ruleId) const;
   QVariantMap routeRule(const QString &ruleId) const;
   bool startRouteRule(const QString &action, const QStringList &arguments,
@@ -233,12 +317,14 @@ private:
   QVariantList processChoices_;
   QString pendingProcessDirection_;
   QString pendingProcessDevice_;
+  AudioSelectionPlan pendingSelection_;
   QString statusId_;
   QString errorId_;
   int commandTimeoutMilliseconds_ = 15000;
   bool busy_ = false;
   bool snapshotReady_ = false;
   bool processChoiceOpen_ = false;
+  bool selectionConfirmationOpen_ = false;
 };
 
 #endif

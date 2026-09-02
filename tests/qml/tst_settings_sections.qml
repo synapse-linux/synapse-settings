@@ -29,6 +29,33 @@ TestCase {
                 levelControlAvailable: true
             }]
             property var audioCards: []
+            property bool audioProfilePortAvailable: true
+            property bool audioProfilePortMutationAvailable: true
+            property string audioProfilePortReason: ""
+            property var audioProfileCards: [{
+                id: "card-0123456789abcdef",
+                label: "Primary audio card",
+                activeProfile: "profile-0123456789abcdef",
+                activeProfileLabel: "High Fidelity",
+                mutationAvailable: true,
+                profiles: [
+                    { id: "profile-0123456789abcdef", label: "High Fidelity", availability: "available" },
+                    { id: "profile-fedcba9876543210", label: "Pro Audio", availability: "unknown" },
+                    { id: "profile-1111111111111111", label: "Unavailable profile", availability: "unavailable" }
+                ]
+            }]
+            property var audioPortEndpoints: [{
+                id: "output-0123456789abcdef",
+                direction: "output",
+                label: "Output",
+                activePort: "port-0123456789abcdef",
+                activePortLabel: "Speakers",
+                mutationAvailable: true,
+                ports: [
+                    { id: "port-0123456789abcdef", label: "Speakers", availability: "available" },
+                    { id: "port-fedcba9876543210", label: "Headphones", availability: "unknown" }
+                ]
+            }]
             property var audioRouteRules: [{
                 id: "rule-0001",
                 matchType: "directory",
@@ -52,6 +79,11 @@ TestCase {
                 target: "output-0123456789abcdef"
             }]
             property bool audioProcessChoiceOpen: false
+            property bool audioSelectionConfirmationOpen: false
+            property string audioSelectionKind: ""
+            property string audioSelectionTargetLabel: ""
+            property string audioSelectionOriginalLabel: ""
+            property string audioSelectionRequestedLabel: ""
             property string audioStatusId: ""
             property string audioErrorId: ""
             property int audioLoads: 0
@@ -65,8 +97,14 @@ TestCase {
             property int confirmedProcessRules: 0
             property int cancelledProcessRules: 0
             property int removedRules: 0
+            property int profilePlans: 0
+            property int portPlans: 0
+            property int confirmedSelections: 0
+            property int cancelledSelections: 0
             property var lastCall: []
             signal audioProcessChoiceRequested()
+            signal audioSelectionConfirmationRequested()
+            signal audioSelectionChanged()
 
             function loadAudio() { audioLoads++ }
             function setAudioDefault(direction, device) {
@@ -84,6 +122,38 @@ TestCase {
             function setAudioMuted(target, muted) {
                 muteSets++
                 lastCall = [target, muted]
+            }
+            function planAudioProfile(card, profile) {
+                profilePlans++
+                lastCall = [card, profile]
+                audioSelectionKind = "profile"
+                audioSelectionTargetLabel = "Primary audio card"
+                audioSelectionOriginalLabel = "High Fidelity"
+                audioSelectionRequestedLabel = "Pro Audio"
+                audioSelectionConfirmationOpen = true
+                audioSelectionChanged()
+                audioSelectionConfirmationRequested()
+            }
+            function planAudioPort(direction, device, port) {
+                portPlans++
+                lastCall = [direction, device, port]
+                audioSelectionKind = "port"
+                audioSelectionTargetLabel = "Output"
+                audioSelectionOriginalLabel = "Speakers"
+                audioSelectionRequestedLabel = "Headphones"
+                audioSelectionConfirmationOpen = true
+                audioSelectionChanged()
+                audioSelectionConfirmationRequested()
+            }
+            function confirmAudioSelection() {
+                confirmedSelections++
+                audioSelectionConfirmationOpen = false
+                audioSelectionChanged()
+            }
+            function cancelAudioSelection() {
+                cancelledSelections++
+                audioSelectionConfirmationOpen = false
+                audioSelectionChanged()
             }
             function chooseAudioProcessRule(direction, device) {
                 processRules++
@@ -221,6 +291,46 @@ TestCase {
         compare(backend.muteSets, 1)
         compare(backend.lastCall, ["playback-30", true])
         compare(section.pendingControlTarget, "")
+    }
+
+    function test_guardedProfileAndPortConfirmation() {
+        let backend = createTemporaryObject(fakeBackend, this)
+        let section = createTemporaryObject(audioComponent, this, { backend: backend })
+        verify(section)
+        section.visible = true
+        wait(0)
+        compare(section.profilePortBoundaryText(), "A profile may rebuild the software Audio graph; a port changes one selected signal path. Synapse does not play or record a test sound, and software verification is not hardware readback.")
+        compare(section.profilePortUnavailableText(), "Audio profiles and ports are unavailable.")
+
+        let profileChooser = findChild(section, "audioProfileChooser-card-0123456789abcdef")
+        verify(profileChooser)
+        compare(profileChooser.currentIndex, 0)
+        profileChooser.activated(1)
+        compare(backend.profilePlans, 1)
+        compare(backend.lastCall, ["card-0123456789abcdef", "profile-fedcba9876543210"])
+        let selectionDialog = findChild(section, "audioSelectionDialog")
+        verify(selectionDialog)
+        tryCompare(selectionDialog, "opened", true)
+        selectionDialog.accept()
+        compare(backend.confirmedSelections, 1)
+        compare(backend.audioSelectionConfirmationOpen, false)
+
+        let portChooser = findChild(section, "audioPortChooser-output-0123456789abcdef")
+        verify(portChooser)
+        compare(portChooser.currentIndex, 0)
+        portChooser.activated(1)
+        compare(backend.portPlans, 1)
+        compare(backend.lastCall, ["output", "output-0123456789abcdef", "port-fedcba9876543210"])
+        tryCompare(selectionDialog, "opened", true)
+        selectionDialog.reject()
+        compare(backend.cancelledSelections, 1)
+        compare(backend.audioSelectionConfirmationOpen, false)
+
+        backend.audioProfilePortAvailable = false
+        backend.audioProfilePortReason = "timeout"
+        compare(section.profilePortUnavailableText(), "Audio profile and port discovery timed out safely.")
+        backend.audioProfilePortReason = "invalid-response"
+        compare(section.profilePortUnavailableText(), "The Audio profile and port inventory was rejected safely.")
     }
 
     function test_typedProcessExecutableAndDirectoryRules() {

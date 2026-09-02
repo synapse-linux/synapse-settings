@@ -91,7 +91,7 @@ assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections']
 PY
 "$binary" sections --format text >"$work/sections.txt"
 grep -Fq $'audio\tAudio\taudio-card\tavailable' "$work/sections.txt"
-[[ $($binary --version) == 'synapse-settings 0.9.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 1.0.0-alpha.1' ]]
 "$binary" --help >"$work/help.txt"
 grep -Fq 'synapse-settings audio policy set-rule' "$work/help.txt"
 grep -Fq 'synapse-settings audio plan-volume' "$work/help.txt"
@@ -256,7 +256,13 @@ else:
 open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
 PY
   case "$mode" in
-    timeout-after-mutate) exec 1>&-; sleep 5; exit 65 ;;
+    timeout-after-mutate)
+      if (( count == 1 )); then
+        exec 1>&-
+        sleep 5
+        exit 65
+      fi
+      ;;
     fail-after-mutate|rollback-fail|external-restore-before-rollback|intervene-before-rollback) exit 65 ;;
     postflight-unavailable) : >"$SYNAPSE_AUDIO_FIXTURES/fail-next-stream-list" ;;
     identity-change)
@@ -282,7 +288,11 @@ PY
 
 case "${1-} ${2-} ${3-}" in
   '--format=json info ')
-    printf '{"default_sink_name":"%s","default_source_name":"%s"}\n' "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-sink")" "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-source")" ;;
+    if [[ -e $SYNAPSE_AUDIO_FIXTURES/info-override.json ]]; then
+      cat "$SYNAPSE_AUDIO_FIXTURES/info-override.json"
+    else
+      printf '{"default_sink_name":"%s","default_source_name":"%s"}\n' "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-sink")" "$(cat "$SYNAPSE_AUDIO_FIXTURES/default-source")"
+    fi ;;
   '--format=json list sinks')
     mode=${SYNAPSE_AUDIO_CONTROL_MODE:-}
     if [[ $mode == external-restore-before-rollback || $mode == intervene-before-rollback ]] &&
@@ -368,7 +378,7 @@ AUDIO_ENV=(env SYNAPSE_PACTL="$work/bin/pactl-fake" SYNAPSE_AUDIO_FIXTURES="$aud
 python - "$work/audio-inventory.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]))
-assert v['schema']=='synapse.settings.audio-inventory/v1'
+assert v['schema']=='synapse.settings.audio-inventory/v2'
 assert v['available'] and v['mutationAvailable'] and v['reason'] is None
 assert v['stateAuthority']=='pipewire-pulse-model'
 assert [(x['label'],x['default'],x['volumePercent']) for x in v['outputs']]==[
@@ -380,8 +390,38 @@ assert len(v['streams'])==1 and v['streams'][0]['id']=='playback-30'
 assert v['streams'][0]['target']==v['outputs'][1]['id'] and v['streams'][0]['volumePercent']==75
 assert v['streams'][0]['processRuleAvailable'] is True
 assert len(v['cards'])==1 and v['cards'][0]['id'].startswith('card-')
-assert v['cards'][0]['label']=='Primary audio card' and v['cards'][0]['activeProfile']=='HiFi'
+assert v['cards'][0]['label']=='Primary audio card'
+assert v['cards'][0]['activeProfile'].startswith('profile-')
+assert len(v['cards'][0]['activeProfile'])==24
 PY
+
+# Base inventory and the richer profile contract hash the same private raw
+# identities without sanitizing valid non-NUL UTF-8 control bytes.
+cp "$audio/cards.json" "$audio/cards.base.json"
+python - "$audio/cards.json" <<'PY'
+import json,sys
+path=sys.argv[1];cards=json.load(open(path,encoding='utf-8'))
+cards[0]['name']='card.\nopaque'
+cards[0]['active_profile']='profile.\topaque'
+cards[0]['profiles']={
+    'profile.\topaque':{'description':'Opaque profile','available':True}}
+open(path,'w',encoding='utf-8').write(json.dumps(cards,separators=(',',':'))+'\n')
+PY
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json >"$work/audio-opaque.json"
+"${AUDIO_ENV[@]}" "$binary" audio profile-port-inventory --format json \
+  >"$work/profile-port-opaque.json"
+python - "$work/audio-opaque.json" "$work/profile-port-opaque.json" <<'PY'
+import json,sys
+base=json.load(open(sys.argv[1],encoding='utf-8'))
+rich=json.load(open(sys.argv[2],encoding='utf-8'))
+assert base['available'] and rich['available']
+assert base['cards'][0]['id']==rich['cards'][0]['id']
+assert base['cards'][0]['activeProfile']==rich['cards'][0]['activeProfile']
+serialized=open(sys.argv[1],encoding='utf-8').read()+open(sys.argv[2],encoding='utf-8').read()
+assert 'card.\\nopaque' not in serialized and 'profile.\\topaque' not in serialized
+PY
+mv "$audio/cards.base.json" "$audio/cards.json"
+
 read -r integrated_output headset_output builtin_input usb_input < <(python - "$work/audio-inventory.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]))
@@ -391,6 +431,8 @@ PY
 )
 bash "$root/tests/audio-control-run.sh" "$binary" "$work/bin/pactl-fake" \
   "$audio" "$work" "$integrated_output" "$usb_input"
+bash "$root/tests/audio-profile-port-run.sh" "$binary" \
+  "$root/tests/fake-pactl-profile-port.py" "$work"
 "${AUDIO_ENV[@]}" "$binary" audio plan-default --direction output --device "$headset_output" --format json >"$work/audio-plan.json"
 python - "$work/audio-plan.json" "$headset_output" <<'PY'
 import json,sys
@@ -460,7 +502,203 @@ python - "$work/audio-negative-stream.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]));assert v['available'] is False and v['reason']=='invalid-response'
 PY
+cp "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
+for invalid_case in properties-not-object null-application-label \
+    null-media-label overlong-application-label overlong-media-label \
+    malformed-stream-mute malformed-stream-volume oversized-stream-volume; do
+  cp "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
+  python - "$invalid_case" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+case,path=sys.argv[1:]
+streams=json.load(open(path))
+if case=='properties-not-object':
+    streams[0]['properties']=[]
+elif case=='null-application-label':
+    streams[0]['properties']['application.name']=None
+elif case=='null-media-label':
+    streams[0]['properties']['media.name']=None
+elif case=='overlong-application-label':
+    streams[0]['properties']['application.name']='L'*256
+elif case=='overlong-media-label':
+    streams[0]['properties']['media.name']='L'*256
+elif case=='malformed-stream-mute':
+    streams[0]['mute']='false'
+elif case=='malformed-stream-volume':
+    streams[0]['volume']={'mono':{'value':'65536'}}
+elif case=='oversized-stream-volume':
+    streams[0]['volume']={'mono':{'value':2**32}}
+else:
+    raise AssertionError(case)
+open(path,'w').write(json.dumps(streams,separators=(',',':'))+'\n')
+PY
+  "${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+    >"$work/audio-$invalid_case.json"
+  python - "$work/audio-$invalid_case.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert not value['available'] and value['reason']=='invalid-response'
+assert value['outputs']==[] and value['inputs']==[]
+assert value['streams']==[] and value['cards']==[]
+PY
+done
+for degraded_case in integer-process-id malformed-process-id; do
+  cp "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
+  python - "$degraded_case" "$audio/sink-inputs.json" <<'PY'
+import json,sys
+case,path=sys.argv[1:]
+streams=json.load(open(path))
+streams[0]['properties']['application.process.id'] = (
+    1234 if case == 'integer-process-id' else '12x4')
+open(path,'w').write(json.dumps(streams,separators=(',',':'))+'\n')
+PY
+  "${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+    >"$work/audio-$degraded_case.json"
+  python - "$work/audio-$degraded_case.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert value['available'] and len(value['streams']) == 1
+assert not value['streams'][0]['processRuleAvailable']
+PY
+done
 mv "$audio/sink-inputs.valid.json" "$audio/sink-inputs.json"
+
+# Base inventory independently rejects empty/over-bound identities, malformed
+# monitor metadata, and duplicate backend indexes even when raw names differ.
+cp "$audio/sinks.json" "$audio/sinks.base-valid.json"
+cp "$audio/sources.json" "$audio/sources.base-valid.json"
+cp "$audio/cards.json" "$audio/cards.base-valid.json"
+for invalid_case in empty-output-name overlong-card-name duplicate-output-index \
+    duplicate-card-index null-output-label null-input-label null-card-label \
+    malformed-output-mute malformed-output-volume oversized-output-volume \
+    malformed-monitor-index duplicate-monitor-index overlong-monitor-name \
+    overlong-monitor-label null-monitor-label null-monitor-source \
+    malformed-monitor-mute malformed-monitor-volume too-many-monitor-inputs; do
+  cp "$audio/sinks.base-valid.json" "$audio/sinks.json"
+  cp "$audio/sources.base-valid.json" "$audio/sources.json"
+  cp "$audio/cards.base-valid.json" "$audio/cards.json"
+  python - "$invalid_case" "$audio/sinks.json" "$audio/sources.json" \
+      "$audio/cards.json" <<'PY'
+import json,sys
+case,sinks_path,sources_path,cards_path=sys.argv[1:]
+sinks=json.load(open(sinks_path));sources=json.load(open(sources_path));cards=json.load(open(cards_path))
+if case=='empty-output-name':
+    sinks[0]['name']=''
+elif case=='overlong-card-name':
+    cards[0]['name']='c'*256
+elif case=='duplicate-output-index':
+    duplicate=dict(sinks[0]);duplicate['name']='sink.z';sinks.append(duplicate)
+elif case=='duplicate-card-index':
+    duplicate=dict(cards[0]);duplicate['name']='card.z';cards.append(duplicate)
+elif case=='null-output-label':
+    sinks[0]['description']=None
+elif case=='null-input-label':
+    sources[0]['description']=None
+elif case=='null-card-label':
+    cards[0]['description']=None
+elif case=='malformed-output-mute':
+    sinks[0]['mute']='false'
+elif case=='malformed-output-volume':
+    sinks[0]['volume']={'mono':{'value':'65536'}}
+elif case=='oversized-output-volume':
+    sinks[0]['volume']={'mono':{'value':2**32}}
+elif case=='malformed-monitor-index':
+    sources[0]['monitor_of_sink']='not-an-index'
+elif case=='duplicate-monitor-index':
+    sources[2]['index']=sources[0]['index']
+elif case=='overlong-monitor-name':
+    sources[2]['name']='m'*256
+elif case=='overlong-monitor-label':
+    sources[2]['description']='L'*256
+elif case=='null-monitor-label':
+    sources[2]['description']=None
+elif case=='null-monitor-source':
+    sources[2]['monitor_source']=None
+elif case=='malformed-monitor-mute':
+    sources[2]['mute']='false'
+elif case=='malformed-monitor-volume':
+    sources[2]['volume']={'mono':{'value':'65536'}}
+elif case=='too-many-monitor-inputs':
+    sources=[{'index':index,'name':f'sink.{index}.monitor',
+              'description':'Monitor','monitor_of_sink':index,
+              'monitor_source':f'sink.{index}','mute':False,'volume':{}}
+             for index in range(65)]
+else:
+    raise AssertionError(case)
+for path,value in ((sinks_path,sinks),(sources_path,sources),(cards_path,cards)):
+    open(path,'w').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  "${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+    >"$work/audio-$invalid_case.json"
+  python - "$work/audio-$invalid_case.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert not value['available'] and value['reason']=='invalid-response'
+assert value['outputs']==[] and value['inputs']==[] and value['cards']==[]
+PY
+done
+mv "$audio/sinks.base-valid.json" "$audio/sinks.json"
+mv "$audio/sources.base-valid.json" "$audio/sources.json"
+mv "$audio/cards.base-valid.json" "$audio/cards.json"
+cp "$audio/default-sink" "$audio/default-sink.base-valid"
+python - "$audio/default-sink" <<'PY'
+import sys
+open(sys.argv[1],'w',encoding='ascii').write('d'*256+'\n')
+PY
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+  >"$work/audio-overlong-default.json"
+python - "$work/audio-overlong-default.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert not value['available'] and value['reason']=='invalid-response'
+assert value['outputs']==[] and value['inputs']==[] and value['cards']==[]
+PY
+for default_key in default_sink_name default_source_name; do
+  python - "$audio/info-override.json" "$default_key" <<'PY'
+import json,sys
+key=sys.argv[2]
+value={'default_sink_name':'sink.a','default_source_name':'source.a'}
+value[key]=None
+open(sys.argv[1],'w',encoding='utf-8').write(json.dumps(value,separators=(',',':'))+'\n')
+PY
+  "${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+    >"$work/audio-null-$default_key.json"
+  python - "$work/audio-null-$default_key.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert not value['available'] and value['reason']=='invalid-response'
+assert value['outputs']==[] and value['inputs']==[] and value['cards']==[]
+PY
+done
+rm -f "$audio/info-override.json"
+: >"$audio/default-sink"
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+  >"$work/audio-empty-default.json"
+python - "$work/audio-empty-default.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert value['available'] and value['reason'] is None
+assert not any(item['default'] for item in value['outputs'])
+PY
+mv "$audio/default-sink.base-valid" "$audio/default-sink"
+cp "$audio/sources.json" "$audio/sources.before-monitor-limit"
+python - "$audio/sources.json" <<'PY'
+import json,sys
+sources=[{'index':index,'name':f'sink.{index}.monitor',
+          'description':'Monitor','monitor_of_sink':index,
+          'monitor_source':f'sink.{index}','mute':False,'volume':{}}
+         for index in range(64)]
+open(sys.argv[1],'w').write(json.dumps(sources,separators=(',',':'))+'\n')
+PY
+"${AUDIO_ENV[@]}" "$binary" audio inventory --format json \
+  >"$work/audio-monitor-limit.json"
+python - "$work/audio-monitor-limit.json" <<'PY'
+import json,sys
+value=json.load(open(sys.argv[1]))
+assert value['available'] and value['reason'] is None
+assert value['inputs']==[] and len(value['outputs'])==2
+PY
+mv "$audio/sources.before-monitor-limit" "$audio/sources.json"
+
 for args in \
   "audio set-default --direction output --device $integrated_output --ack wrong" \
   'audio set-default --direction output --device raw-device --ack synapse-settings/audio-default/v1' \
@@ -1087,7 +1325,31 @@ from jsonschema import Draft202012Validator
 root=Path(sys.argv[1]);work=Path(sys.argv[2]);policy=Path(sys.argv[3])
 pairs=[
  ('sections-v2.schema.json','sections-final.json'),
- ('audio-inventory-v1.schema.json','audio-inventory.json'),
+ ('audio-inventory-v2.schema.json','audio-inventory.json'),
+ ('audio-profile-port-inventory-v1.schema.json','profile-port-inventory.json'),
+ ('audio-profile-port-inventory-v1.schema.json','profile-port-invalid-inventory.json'),
+ ('audio-profile-port-plan-v1.schema.json','profile-port-profile-plan.json'),
+ ('audio-profile-port-plan-v1.schema.json','profile-port-profile-same-plan.json'),
+ ('audio-profile-port-plan-v1.schema.json','profile-port-output-port-plan.json'),
+ ('audio-profile-port-plan-v1.schema.json','profile-port-input-port-plan.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-profile-applied.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-profile-same.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-output-port-applied.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-input-port-applied.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-original-mismatch.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-cohort-mismatch.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-double-refused.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-no-mutate-success.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-fail.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-fail-after-mutate.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-timeout-after-mutate.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-unexpected-success.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-external-restore-before-rollback.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-intervene-before-rollback.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-rollback-fail.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-identity-change.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-vanish-after-selection.json'),
+ ('audio-profile-port-receipt-v1.schema.json','profile-port-postflight-unavailable.json'),
  ('audio-route-broker-status-v1.schema.json','status-inactive.json'),
  ('audio-default-plan-v1.schema.json','audio-plan.json'),
  ('audio-default-receipt-v1.schema.json','audio-receipt.json'),
@@ -1150,14 +1412,30 @@ for schema_name,document_name in pairs:
 Draft202012Validator(json.loads((root/'schemas/audio-route-policy-v1.schema.json').read_text())).validate(json.loads(policy.read_text()))
 control_plan_validator=Draft202012Validator(json.loads((root/'schemas/audio-control-plan-v1.schema.json').read_text()))
 control_receipt_validator=Draft202012Validator(json.loads((root/'schemas/audio-control-receipt-v1.schema.json').read_text()))
+selection_inventory_validator=Draft202012Validator(json.loads((root/'schemas/audio-profile-port-inventory-v1.schema.json').read_text()))
+selection_plan_validator=Draft202012Validator(json.loads((root/'schemas/audio-profile-port-plan-v1.schema.json').read_text()))
+selection_receipt_validator=Draft202012Validator(json.loads((root/'schemas/audio-profile-port-receipt-v1.schema.json').read_text()))
 plan=json.loads((work/'control-volume-plan.json').read_text())
 receipt=json.loads((work/'control-volume-applied.json').read_text())
+selection_inventory=json.loads((work/'profile-port-inventory.json').read_text())
+selection_plan=json.loads((work/'profile-port-profile-plan.json').read_text())
+selection_receipt=json.loads((work/'profile-port-profile-applied.json').read_text())
 invalid=[]
 value=dict(plan);value['targetType']='input';invalid.append((control_plan_validator,value))
 value=dict(plan);value['requestedValue']=101;invalid.append((control_plan_validator,value))
 value=dict(receipt);value['playbackStarted']=True;invalid.append((control_receipt_validator,value))
 value=dict(receipt);value.update(status='Failed',reason='rollback-failed',changed=False,verified=False,rollbackAttempted=False);invalid.append((control_receipt_validator,value))
 value=dict(receipt);value.update(status='Refused',reason='mutation-failed',changed=False,mutationAttempted=False,verified=False);invalid.append((control_receipt_validator,value))
+value=dict(selection_inventory);value['rawName']='card.alpha';invalid.append((selection_inventory_validator,value))
+value=dict(selection_inventory);value.update(available=False,reason='invalid-response',mutationAvailable=False);invalid.append((selection_inventory_validator,value))
+value=dict(selection_plan);value['targetType']='output';invalid.append((selection_plan_validator,value))
+value=dict(selection_plan);value['requestedAvailability']='unavailable';invalid.append((selection_plan_validator,value))
+value=dict(selection_plan);value['hardwareReadback']=True;invalid.append((selection_plan_validator,value))
+value=dict(selection_plan);value['defaultChanged']=True;invalid.append((selection_plan_validator,value))
+value=dict(selection_receipt);value['profileChanged']=False;invalid.append((selection_receipt_validator,value))
+value=dict(selection_receipt);value['defaultChanged']=True;invalid.append((selection_receipt_validator,value))
+value=dict(selection_receipt);value.update(status='Refused',reason='mutation-failed',changed=False,mutationAttempted=False,verified=False,profileChanged=False);invalid.append((selection_receipt_validator,value))
+value=dict(selection_receipt);value.update(status='Failed',reason='rollback-failed',changed=False,verified=False,rollbackAttempted=False,rollbackVerified=False,profileChanged=False);invalid.append((selection_receipt_validator,value))
 for validator,value in invalid:
  assert list(validator.iter_errors(value)), value
 print(f'schema validations: {len(pairs)+1}')

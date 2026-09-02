@@ -3,8 +3,9 @@
 ## Layers
 
 1. `synapse-settings` C11 core owns inventory, validation, canonicalization,
-   policy persistence, precedence, guarded default-device and level-control
-   operations, and the read-only GoXLR status bridge.
+   policy persistence, precedence, guarded default-device, level-control,
+   card-profile and endpoint-port operations, and the read-only GoXLR status
+   bridge.
 2. `AudioAdapter` is a thin Qt/C++ boundary. It owns bounded asynchronous core
    execution, strict contract decoding, native path choosers and publication of
    bounded presentation projections.
@@ -13,9 +14,10 @@
    PipeWire-Pulse observation and new-stream enforcement. Its user service is
    staged but never enabled automatically.
 
-No lower layer delegates authority upward. QML never sees raw JSON, PipeWire or
-provider identities, provider profile values, PIDs, command lines, environments,
-acknowledgements or backend argv. A
+No lower layer delegates authority upward. QML never sees raw JSON, raw
+PipeWire card/endpoint/profile/port names, provider identities, provider profile
+values, PIDs, command lines, environments, acknowledgements, cohorts or backend
+argv. A
 process candidate consists only of an opaque Audio stream ID and a sanitized
 label. Executable and directory paths remain inside the native chooser and
 adapter-to-core invocation.
@@ -49,30 +51,41 @@ frames. The existing feature QML receives the same typed adapter as the
 standalone application and remains free of Quickshell imports.
 
 The host sets an explicit `active` boolean. Activation lazily creates the Audio
-section and starts the read-only inventory-policy-broker-status-GoXLR-status
-load. Hiding the
+section and starts the read-only base-inventory-profile/port-inventory-policy-
+broker-status-GoXLR-status load. Hiding the
 section releases its presentation objects without adding ambient mutation or
 reconciliation; the typed singleton remains single-flight. A host that offers
 native executable/directory dialogs must run as `QApplication`. If it does not,
 the adapter returns the typed `native-dialog-unavailable` presentation error
 without invoking a backend operation.
 
-Unknown, missing or malformed GUI locale requests fall back to embedded
-`en_US`. The current source candidate still has only `en_US` and `it_IT`
-catalogues; the other pinned GUI catalogues remain a release blocker rather
-than an implied completion claim.
+All 64 locale identifiers in the pinned GUI inventory resolve to embedded,
+package-owned catalogues. `en_US` and `it_IT` have complete translations. The
+other 62 alpha catalogues deliberately mark every source-English entry
+unfinished, so Qt can provide a deterministic per-message `en_US` fallback
+without overstating translation coverage. Exact catalogue inventory, active
+message parity, placeholders and completion states are validated from source;
+recognized RTL locales also set Qt's layout direction and mirror descendants
+of the feature presentation root. Unknown, missing or
+malformed requests fall back to embedded `en_US`.
 
 ## Adapter transaction boundary
 
 The production GUI discovers only a same-directory `synapse-settings` binary or
 fixed `/usr/bin/synapse-settings`. It invokes it through `QProcess` with a fixed
 program, allowlisted arguments, locale-independent output, one in-flight command,
-a bounded response and a bounded timeout. It never invokes a shell.
+a bounded response and a bounded timeout. Read-only and planning commands retain
+the base outer deadline; apply paths use separately bounded transaction-aware
+multipliers sized for their maximum sequential C11 capture cohorts, capped at
+two minutes. It never invokes a shell.
 
 Every JSON object is decoded into an exact expected field set. Arrays, text,
-identities and integer ranges are bounded; duplicate endpoint, stream, card and
-rule identities fail closed. Models publish only after inventory, route policy, separate broker runtime
-status and read-only GoXLR status all pass validation.
+identities and integer ranges are bounded; duplicate endpoint, stream, card,
+profile, port and rule identities fail closed. Models publish only after base
+inventory, the separately decoded profile/port inventory, route policy, broker
+runtime status and read-only GoXLR status all pass validation. Profile/port
+active selections and target labels must also agree with the accepted base
+inventory before publication.
 
 A GUI default-device transaction is:
 
@@ -123,6 +136,80 @@ A GUI existing-stream transaction is independent:
 QML owns only the visible modal confirmation. It never receives the cohort,
 acknowledgement, process identity, backend index or raw endpoint.
 
+A GUI profile or port transaction is a third independent family:
+
+1. validate one published card/profile pair or direction-compatible
+   endpoint/port pair, rejecting choices typed unavailable;
+2. request and independently validate a fresh plan, owner-scoped choices and
+   opaque `selection-…` cohort;
+3. show only bounded target/original/requested labels and explicit graph/signal-
+   path consequences in QML;
+4. invoke acknowledged apply with the exact original selection and adapter-owned
+   cohort, then independently validate the receipt and compensation invariants;
+5. reload the complete base/profile-port/policy/broker/GoXLR cohort after every
+   apply, refusal, failure, restoration or uncertain transport result.
+
+The acknowledgement, cohort, raw target and choice names, backend index and
+setter argv never enter QML. Opening or cancelling confirmation performs no
+mutation.
+
+## Guarded profile and port transaction boundary
+
+Alpha 10 keeps card-profile and endpoint-port authority outside
+`audio-control/v1`. `profile-port-inventory` is a bounded, read-only v1 contract
+with at most 32 cards, 64 outputs, 64 physical inputs, 64 options per target,
+512 total profiles and 512 total ports. Raw names and labels are bounded to 255
+bytes in C11. Missing labels remain empty contract presentation data; only QML
+supplies localized generic display text. The 64-item input bound includes
+monitor sources: their index, raw name, monitor metadata, label, port array,
+per-port name/label/availability and active selection are validated before
+exclusion. PulseAudio 17 card profiles retain their object-keyed representation
+and optional boolean `available`; endpoint ports retain their array
+representation and optional fixed-C-locale `availability` string (`available`,
+`availability unknown` or `not available`). Omitted collections mean no choices,
+whereas present null or wrong-shaped collections fail closed. Their options
+consume the global 512-port budget, and duplicate indexes or option tokens fail
+closed even when an item is excluded.
+Raw `pactl` JSON is captured for at most two seconds and exactly 1
+MiB; byte 1 MiB + 1, invalid UTF-8, raw or escaped NUL, malformed escapes,
+unpaired surrogates, invalid literals or numbers, trailing commas/data,
+excessive nesting/key counts and duplicate decoded object keys fail closed.
+Valid paired surrogates and exact configured limits remain accepted. The fixed-
+argv child runs in a dedicated process group with null stdin/stderr and a
+parent-death `SIGKILL`; setup, timeout, capture errors and non-successful exits
+terminate its whole group. Target tokens retain
+the established `card-…`, `output-…` and `input-…` forms; profile and port
+choices are owner-scoped `profile-…` and `port-…` tokens. Labels never determine
+identity or cohort binding.
+
+Availability is exactly `available`, `unknown` or `unavailable`. Unknown choices
+may be planned; unavailable requested choices fail before mutation. A target
+without a resolvable active choice cannot mutate. `plan-profile` and `plan-port`
+bind the private target name, backend index, exact active and requested raw
+choices, requested availability and opaque tokens into one `selection-…`
+cohort. Apply requires the exact original token and
+`synapse-settings/audio-profile-port/v1`, then repeats state and identity
+preflight twice.
+
+A changed transaction issues at most one fixed `set-card-profile`,
+`set-sink-port` or `set-source-port` request and never retries an uncertain
+request. Command exit does not prove success; fresh state must retain the same
+target identity and exact requested selection. Compensation is considered only
+when that first postflight visibly observed the requested selection after a
+non-successful or otherwise unverified setter. Immediately before one exact-
+original setter, another fresh same-identity read must still observe that same
+requested selection. External restoration causes no setter. An immediate or
+intervening third choice, unavailable original choice, vanished target, identity
+change or unavailable verification blocks compensation; a requested mutation
+is never retried. Any compensation must itself be verified in the software
+model.
+
+Plans and receipts declare `stateAuthority=pipewire-pulse-model`,
+`hardwareReadback=false` and `hardwareExactRollback=false`. A profile may rebuild
+the graph and change the signal path; a port may change only the selected signal
+path. Neither operation starts playback/capture, changes a default or policy, or
+proves audibility. Qualification in this increment is fixture-only.
+
 ## Guarded volume and mute transaction boundary
 
 Alpha 8 exposes separate `plan-volume`, `set-volume`, `plan-mute` and `set-mute`
@@ -160,9 +247,11 @@ not change a live device or stream and did not start playback or capture.
 The Settings-only C11 bridge checks the fixed production
 `/usr/bin/synapse-goxlr` executable and invokes exactly
 `provider-status --format json` with no shell. Its isolated child process group,
-null input/error streams, monotonic deadline and output capture limit execution
-to three seconds and 65536 bytes. A close-on-exec child-report channel
-unambiguously separates setup or `exec` failure from every clean provider
+parent-death `SIGKILL`, null input/error streams, monotonic deadline and output
+capture limit execution to three seconds and 65536 bytes. Child descriptor setup
+also remains valid when Settings inherited closed standard descriptors, and a
+non-successful provider exit terminates the whole child group. A close-on-exec
+child-report channel unambiguously separates setup or `exec` failure from every clean provider
 nonzero exit, including 126 and 127. The test path override is compiled only
 into the fixture Settings binary; the production Audio broker neither links the
 bridge nor contains its path or hook.
@@ -185,8 +274,20 @@ hardware readback or physical qualification.
 ## PipeWire-Pulse core adapter
 
 Production executes only absolute `/usr/bin/pactl` with fixed operation argv.
-Each child has bounded capture and a two-second timeout. Executable and policy
-path overrides exist only in a separately compiled fixture binary.
+Each child has bounded capture, a two-second timeout, an isolated process group,
+null input/error streams and parent-death `SIGKILL`. Executable and policy path
+overrides exist only in a separately compiled fixture binary.
+
+Backend indexes are exact nonnegative JSON integers through `INT_MAX` and must
+be unique within each raw inventory. Present mute and volume values must retain
+the expected types; every volume channel is an integer through `UINT32_MAX`, and
+projection arithmetic rejects overflow before rounding. A present stream
+`properties` value must be an object, and present `application.name` or
+`media.name` values must be bounded strings. Missing optional fields retain
+their defined fallbacks. A malformed process-ID property only disables the
+process-bound rule capability. Default sink/source names are opaque bounded raw
+identities: an empty string means no named default, while an invalid nonempty
+value invalidates and clears the complete inventory.
 
 ## Policy persistence
 

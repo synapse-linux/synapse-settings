@@ -14,6 +14,8 @@ ApplicationWindow {
     visible: true
     title: qsTr("Synapse Settings — Audio")
     color: palette.window
+    LayoutMirroring.enabled: Application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.childrenInherit: true
 
     header: ToolBar {
         RowLayout {

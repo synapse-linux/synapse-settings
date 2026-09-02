@@ -8,6 +8,8 @@ Item {
     required property var backend
     property bool active: visible
     readonly property bool contentLoaded: sectionLoader.status === Loader.Ready
+    LayoutMirroring.enabled: Application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.childrenInherit: true
 
     Loader {
         id: sectionLoader

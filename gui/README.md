@@ -10,18 +10,28 @@ Alpha 7 also exports the same presentation through the
 engine-owned `AudioBackend` singleton and `AudioShellHost` renders the unchanged
 feature QML. Production fixes the singleton backend to
 `/usr/bin/synapse-settings`; the test-only plugin variant can select the fixture
-binary. Package-owned translations initialize when the module loads, with
-unknown locales falling back to `en_US`.
+binary. Package-owned translations initialize when the module loads. All 64
+pinned GUI locale identifiers have embedded catalogues; `en_US` and `it_IT` are
+complete, while the other 62 alpha catalogues contain explicitly unfinished
+source-English entries and therefore fall back per message without claiming
+translated coverage. Unknown or malformed locale requests fall back to
+`en_US`, and recognized RTL locales set the Qt layout direction and mirror the
+feature presentation tree.
 
 The adapter implements these properties:
 
 - `audioBusy`, `audioSnapshotReady`, `audioAvailable`, `audioReason`;
 - `audioOutputs`, `audioInputs`, `audioStreams`, `audioCards`;
+- `audioProfilePortAvailable`, `audioProfilePortMutationAvailable`,
+  `audioProfilePortReason`, `audioProfileCards`, `audioPortEndpoints`;
 - `audioRouteRules`, `audioRouteBrokerAvailable`, `audioRouteBrokerActive`,
   `audioRouteBrokerReason`, `audioRouteEnforcementAvailable`;
 - `audioGoxlrStatus`, `audioGoxlrReason`, `audioGoxlrProviderActive`,
   `audioGoxlrTruncated`, `audioGoxlrDevices`;
 - `audioProcessChoices`, `audioProcessChoiceOpen`;
+- `audioSelectionConfirmationOpen`, `audioSelectionKind`,
+  `audioSelectionTargetLabel`, `audioSelectionOriginalLabel`,
+  `audioSelectionRequestedLabel`;
 - `audioStatusId`, `audioErrorId`.
 
 It implements these fixed operations:
@@ -31,6 +41,9 @@ It implements these fixed operations:
 - `moveAudioStream(streamId, originalDeviceId, requestedDeviceId)`;
 - `setAudioVolume(targetId, percent)`;
 - `setAudioMuted(targetId, muted)`;
+- `planAudioProfile(cardId, profileId)`;
+- `planAudioPort(direction, deviceId, portId)`;
+- `confirmAudioSelection()` and `cancelAudioSelection()`;
 - `chooseAudioProcessRule(direction, deviceId)`;
 - `confirmAudioProcessRule(streamId)` and `cancelAudioProcessRule()`;
 - `chooseAudioExecutableRule(direction, deviceId)`;
@@ -38,14 +51,17 @@ It implements these fixed operations:
 - `removeAudioRouteRule(ruleId)`.
 
 QML does not parse JSON, inspect `/proc`, resolve paths, construct commands,
-select raw PipeWire node names or inject environments. Native path dialogs remain
+select raw PipeWire card, endpoint, profile or port names, receive transaction
+cohorts/acknowledgements, or inject environments. Native path dialogs remain
 inside the adapter. Active-process choices contain only a sanitized label and an
 opaque stream token; the C backend privately maps the selected same-UID process
 to a canonical executable.
 
 The adapter plans default changes before applying them, validates every receipt,
-and republishes only a complete
-inventory-plus-policy-plus-broker-status-plus-GoXLR-status cohort.
+and republishes only a complete base-inventory-plus-profile/port-inventory-plus-
+policy-plus-broker-status-plus-GoXLR-status cohort. It cross-validates
+profile/port targets and active opaque selections against base inventory before
+publishing either model.
 Volume and mute follow their own plan, opaque-cohort, exact-acknowledgement,
 apply, postflight and compensation contract. Every accepted plan reaches the
 apply decoder; an unchanged value is a verified `AlreadySet` receipt without a
@@ -56,7 +72,18 @@ or capture and changes no routing or profile. For an existing active stream it s
 requests a fresh opaque cohort, supplies the core-owned exact acknowledgement,
 and independently validates the one-stream receipt. QML only opens the explicit
 confirmation and chooses a typed endpoint; it never receives the cohort or
-acknowledgement. Policy persistence still does not imply stream movement. The separate C11 broker
+acknowledgement. Profile and port selection uses another independent plan and
+receipt family: QML selects only owner-compatible projected tokens, shows
+bounded original/requested labels and confirms graph/signal-path consequences.
+Empty labels remain presentation-only and QML substitutes localized generic
+text without using an opaque or raw identity as a label. The adapter owns the
+opaque cohort, exact original selection, acknowledgement and apply argv, then
+refreshes after success, refusal, failure or restoration. QML receives no raw
+choice identity and cannot bypass confirmation. Adapter commands have null
+standard input/error, bounded incremental output capture and a dedicated process
+group that is terminated on timeout, output overflow or teardown.
+
+Policy persistence still does not imply stream movement. The separate C11 broker
 owns new-stream observation and enforcement. The adapter obtains only typed,
 read-only runtime status through the C11 CLI; QML maps it to Active, Inactive or
 Unavailable presentation and cannot start, stop or configure the service.

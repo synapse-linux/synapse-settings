@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapseos.dev/schemas/settings/audio-profile-port-plan-v1.schema.json",
+  "title": "Synapse Settings Audio profile and port plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "selection", "target", "targetType",
+    "targetLabel", "originalSelection", "originalLabel",
+    "requestedSelection", "requestedLabel", "requestedAvailability",
+    "cohort", "changed", "stateAuthority", "requiresAcknowledgement",
+    "singleTarget", "postflightRequired", "rollbackOnUnverified",
+    "graphMayChange", "signalPathMayChange", "playbackStarted",
+    "captureStarted", "defaultChanged", "policyChanged", "audibilityVerified",
+    "hardwareReadback", "hardwareExactRollback", "applied", "bounded"
+  ],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-profile-port-plan/v1"},
+    "status": {"const": "Planned"},
+    "selection": {"enum": ["profile", "port"]},
+    "target": {
+      "type": "string",
+      "pattern": "^(card|output|input)-[0-9a-f]{16}$"
+    },
+    "targetType": {"enum": ["card", "output", "input"]},
+    "targetLabel": {"type": "string", "maxLength": 255},
+    "originalSelection": {
+      "type": "string",
+      "pattern": "^(profile|port)-[0-9a-f]{16}$"
+    },
+    "originalLabel": {"type": "string", "maxLength": 255},
+    "requestedSelection": {
+      "type": "string",
+      "pattern": "^(profile|port)-[0-9a-f]{16}$"
+    },
+    "requestedLabel": {"type": "string", "maxLength": 255},
+    "requestedAvailability": {"enum": ["available", "unknown"]},
+    "cohort": {"type": "string", "pattern": "^selection-[0-9a-f]{16}$"},
+    "changed": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-profile-port/v1"},
+    "singleTarget": {"const": true},
+    "postflightRequired": {"const": true},
+    "rollbackOnUnverified": {"const": true},
+    "graphMayChange": {"type": "boolean"},
+    "signalPathMayChange": {"const": true},
+    "playbackStarted": {"const": false},
+    "captureStarted": {"const": false},
+    "defaultChanged": {"const": false},
+    "policyChanged": {"const": false},
+    "audibilityVerified": {"const": false},
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "applied": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"selection": {"const": "profile"}}},
+      "then": {
+        "properties": {
+          "target": {"pattern": "^card-[0-9a-f]{16}$"},
+          "targetType": {"const": "card"},
+          "originalSelection": {"pattern": "^profile-[0-9a-f]{16}$"},
+          "requestedSelection": {"pattern": "^profile-[0-9a-f]{16}$"},
+          "graphMayChange": {"const": true}
+        }
+      },
+      "else": {
+        "properties": {
+          "target": {"pattern": "^(output|input)-[0-9a-f]{16}$"},
+          "targetType": {"enum": ["output", "input"]},
+          "originalSelection": {"pattern": "^port-[0-9a-f]{16}$"},
+          "requestedSelection": {"pattern": "^port-[0-9a-f]{16}$"},
+          "graphMayChange": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "output"}}},
+      "then": {"properties": {"target": {"pattern": "^output-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "input"}}},
+      "then": {"properties": {"target": {"pattern": "^input-[0-9a-f]{16}$"}}}
+    }
+  ]
+}

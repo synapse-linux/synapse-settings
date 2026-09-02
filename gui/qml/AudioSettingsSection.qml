@@ -28,6 +28,11 @@ Item {
     readonly property var inputs: backend ? backend.audioInputs || [] : []
     readonly property var streams: backend ? backend.audioStreams || [] : []
     readonly property var cards: backend ? backend.audioCards || [] : []
+    readonly property bool profilePortAvailable: backend ? backend.audioProfilePortAvailable : false
+    readonly property bool profilePortMutationAvailable: backend ? backend.audioProfilePortMutationAvailable : false
+    readonly property string profilePortReason: backend ? backend.audioProfilePortReason || "" : ""
+    readonly property var profileCards: backend ? backend.audioProfileCards || [] : []
+    readonly property var portEndpoints: backend ? backend.audioPortEndpoints || [] : []
     readonly property var routeRules: backend ? backend.audioRouteRules || [] : []
     readonly property bool routeBrokerAvailable: backend ? backend.audioRouteBrokerAvailable : false
     readonly property bool routeBrokerActive: backend ? backend.audioRouteBrokerActive : false
@@ -166,6 +171,11 @@ Item {
         case "audio-volume-unchanged": return qsTr("The selected Audio item already had that volume.")
         case "audio-mute-applied": return qsTr("Mute state changed and verified.")
         case "audio-mute-unchanged": return qsTr("The selected Audio item already had that mute state.")
+        case "audio-selection-confirmation-required": return qsTr("Review the Audio signal-path change before applying it.")
+        case "audio-profile-applied": return qsTr("Audio profile changed and verified in the software model.")
+        case "audio-profile-unchanged": return qsTr("The selected Audio profile was already active.")
+        case "audio-port-applied": return qsTr("Audio port changed and verified in the software model.")
+        case "audio-port-unchanged": return qsTr("The selected Audio port was already active.")
         case "audio-route-rule-saved": return qsTr("Application Audio rule saved.")
         case "audio-route-rule-unchanged": return qsTr("The Application Audio rule was already present.")
         case "audio-route-rule-removed": return qsTr("Application Audio rule removed.")
@@ -230,6 +240,30 @@ Item {
         return qsTr("Volume and mute affect one selected item. Synapse does not play or record a test sound and does not change routing or profiles.")
     }
 
+    function profilePortBoundaryText() {
+        return qsTr("A profile may rebuild the software Audio graph; a port changes one selected signal path. Synapse does not play or record a test sound, and software verification is not hardware readback.")
+    }
+
+    function profilePortUnavailableText() {
+        if (profilePortReason === "timeout")
+            return qsTr("Audio profile and port discovery timed out safely.")
+        if (profilePortReason === "invalid-response")
+            return qsTr("The Audio profile and port inventory was rejected safely.")
+        return qsTr("Audio profiles and ports are unavailable.")
+    }
+
+    function selectionDisplayLabel(label, selection) {
+        if (label)
+            return label
+        return selection === "profile" ? qsTr("Unnamed profile") : qsTr("Unnamed port")
+    }
+
+    function selectionTargetDisplayLabel(label, selection) {
+        if (label)
+            return label
+        return selection === "profile" ? qsTr("Audio card") : qsTr("Audio endpoint")
+    }
+
     function errorText(errorId) {
         switch (errorId) {
         case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
@@ -255,6 +289,11 @@ Item {
         case "audio-control-refused": return qsTr("The Audio item changed or became unavailable. Nothing was changed.")
         case "audio-control-restored": return qsTr("The Audio control failed; the exact original value was restored and verified.")
         case "audio-control-failed": return qsTr("The Audio control outcome could not be verified safely.")
+        case "audio-selection-plan-failed": return qsTr("The Audio profile or port change could not be planned safely.")
+        case "audio-selection-refused": return qsTr("The Audio profile or port state changed. Nothing was applied.")
+        case "audio-selection-restored": return qsTr("The Audio signal-path change failed; the exact original software state was restored and verified.")
+        case "audio-selection-failed": return qsTr("The Audio profile or port outcome could not be verified safely.")
+        case "profile-port-inventory-unavailable": return qsTr("The Audio profile and port inventory is unavailable.")
         case "output-too-large":
         case "process-crashed": return qsTr("The Audio backend response was rejected.")
         default: return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
@@ -270,6 +309,13 @@ Item {
             root.selectedProcessStream = ""
             processDialog.open()
         }
+        function onAudioSelectionConfirmationRequested() {
+            selectionDialog.open()
+        }
+        function onAudioSelectionChanged() {
+            if (selectionDialog.opened && root.backend && !root.backend.audioSelectionConfirmationOpen)
+                selectionDialog.close()
+        }
     }
 
     Dialog {
@@ -282,6 +328,51 @@ Item {
         onRejected: {
             root.pendingDirection = ""
             root.pendingDevice = ""
+        }
+    }
+
+    Dialog {
+        id: selectionDialog
+        objectName: "audioSelectionDialog"
+        title: root.backend && root.backend.audioSelectionKind === "profile"
+               ? qsTr("Change Audio profile") : qsTr("Change Audio port")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(Math.max(root.width - 40, 320), 560)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            const button = standardButton(Dialog.Ok)
+            if (button)
+                button.text = qsTr("Apply change")
+        }
+        onAccepted: if (root.backend) root.backend.confirmAudioSelection()
+        onRejected: if (root.backend) root.backend.cancelAudioSelection()
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                text: root.backend
+                      ? root.selectionTargetDisplayLabel(root.backend.audioSelectionTargetLabel || "", root.backend.audioSelectionKind || "")
+                      : ""
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.backend
+                      ? qsTr("%1 → %2")
+                            .arg(root.selectionDisplayLabel(root.backend.audioSelectionOriginalLabel || "", root.backend.audioSelectionKind || ""))
+                            .arg(root.selectionDisplayLabel(root.backend.audioSelectionRequestedLabel || "", root.backend.audioSelectionKind || ""))
+                      : ""
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.profilePortBoundaryText()
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+            }
         }
     }
 
@@ -844,17 +935,141 @@ Item {
                     }
                 }
 
-                Label { text: qsTr("Cards and profiles"); font.bold: true }
+                Label { text: qsTr("Profiles and ports"); font.bold: true }
+                Label {
+                    Layout.fillWidth: true
+                    text: root.profilePortBoundaryText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: !root.profilePortAvailable
+                    text: root.profilePortUnavailableText()
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                }
                 Repeater {
-                    model: root.cards
+                    model: root.profileCards
                     delegate: Frame {
-                        id: cardRow
+                        id: profileCardRow
                         required property var modelData
                         Layout.fillWidth: true
-                        RowLayout {
+                        ColumnLayout {
                             anchors.fill: parent
-                            Label { Layout.fillWidth: true; text: cardRow.modelData.label; elide: Text.ElideRight }
-                            Label { text: cardRow.modelData.activeProfile }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.selectionTargetDisplayLabel(profileCardRow.modelData.label || "", "profile")
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: profileCardRow.modelData.activeProfile
+                                          ? root.selectionDisplayLabel(profileCardRow.modelData.activeProfileLabel || "", "profile")
+                                          : qsTr("No active profile")
+                                    opacity: 0.7
+                                }
+                            }
+                            ComboBox {
+                                id: profileChooser
+                                objectName: "audioProfileChooser-" + profileCardRow.modelData.id
+                                Layout.fillWidth: true
+                                model: profileCardRow.modelData.profiles || []
+                                textRole: "label"
+                                valueRole: "id"
+                                enabled: profileCardRow.modelData.mutationAvailable && !root.backend.audioBusy && !root.backend.audioSelectionConfirmationOpen
+                                function activeIndex() {
+                                    const options = profileCardRow.modelData.profiles || []
+                                    for (let index = 0; index < options.length; ++index) {
+                                        if (options[index].id === profileCardRow.modelData.activeProfile)
+                                            return index
+                                    }
+                                    return -1
+                                }
+                                currentIndex: activeIndex()
+                                displayText: currentIndex >= 0 && model[currentIndex]
+                                             ? root.selectionDisplayLabel(model[currentIndex].label || "", "profile")
+                                             : qsTr("No active profile")
+                                delegate: ItemDelegate {
+                                    required property var modelData
+                                    width: profileChooser.width
+                                    text: root.selectionDisplayLabel(modelData.label || "", "profile")
+                                    enabled: modelData.availability !== "unavailable"
+                                }
+                                onActivated: function(index) {
+                                    const option = model[index]
+                                    currentIndex = Qt.binding(function() { return profileChooser.activeIndex() })
+                                    if (root.backend && option && option.availability !== "unavailable" && option.id !== profileCardRow.modelData.activeProfile)
+                                        root.backend.planAudioProfile(profileCardRow.modelData.id, option.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                Repeater {
+                    model: root.portEndpoints
+                    delegate: Frame {
+                        id: portEndpointRow
+                        required property var modelData
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            anchors.fill: parent
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: root.selectionTargetDisplayLabel(portEndpointRow.modelData.label || "", "port")
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: portEndpointRow.modelData.direction === "output" ? qsTr("Output port") : qsTr("Input port")
+                                    opacity: 0.7
+                                }
+                                Label {
+                                    text: portEndpointRow.modelData.activePort
+                                          ? root.selectionDisplayLabel(portEndpointRow.modelData.activePortLabel || "", "port")
+                                          : qsTr("No active port")
+                                    opacity: 0.7
+                                }
+                            }
+                            ComboBox {
+                                id: portChooser
+                                objectName: "audioPortChooser-" + portEndpointRow.modelData.id
+                                Layout.fillWidth: true
+                                model: portEndpointRow.modelData.ports || []
+                                textRole: "label"
+                                valueRole: "id"
+                                enabled: portEndpointRow.modelData.mutationAvailable && !root.backend.audioBusy && !root.backend.audioSelectionConfirmationOpen
+                                function activeIndex() {
+                                    const options = portEndpointRow.modelData.ports || []
+                                    for (let index = 0; index < options.length; ++index) {
+                                        if (options[index].id === portEndpointRow.modelData.activePort)
+                                            return index
+                                    }
+                                    return -1
+                                }
+                                currentIndex: activeIndex()
+                                displayText: currentIndex >= 0 && model[currentIndex]
+                                             ? root.selectionDisplayLabel(model[currentIndex].label || "", "port")
+                                             : qsTr("No active port")
+                                delegate: ItemDelegate {
+                                    required property var modelData
+                                    width: portChooser.width
+                                    text: root.selectionDisplayLabel(modelData.label || "", "port")
+                                    enabled: modelData.availability !== "unavailable"
+                                }
+                                onActivated: function(index) {
+                                    const option = model[index]
+                                    currentIndex = Qt.binding(function() { return portChooser.activeIndex() })
+                                    if (root.backend && option && option.availability !== "unavailable" && option.id !== portEndpointRow.modelData.activePort)
+                                        root.backend.planAudioPort(portEndpointRow.modelData.direction, portEndpointRow.modelData.id, option.id)
+                                }
+                            }
                         }
                     }
                 }

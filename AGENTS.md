@@ -7,7 +7,9 @@
   contracts, own native choosers and publish bounded projections; Audio policy
   and PipeWire authority remain in the C11 core and separate C11 broker.
 - Execute Audio subprocesses with fixed absolute argv, bounded output and bounded
-  time. Test executable/path overrides are compile-time test hooks only.
+  time, null standard input/error, dedicated process groups, whole-group
+  termination and parent-death signals. Test executable/path overrides are
+  compile-time test hooks only.
 - Expose endpoint and stream identities as stable opaque tokens; do not expose
   raw PipeWire names, device addresses, PIDs, command lines or environments.
 - Production GUI discovery is fixed to a same-directory installed core or
@@ -41,6 +43,20 @@
   unchanged observed value. Keep cohorts, acknowledgements and raw setter
   identities outside QML; never imply playback, capture, profile, routing,
   default or policy authority.
+- Card profiles and endpoint ports are a separate inventory and transaction
+  family. Use owner-scoped opaque choice tokens, typed availability, bounded
+  labels, an exact acknowledgement and a cohort bound to target identity and
+  exact original/requested selection. Revalidate twice before one fixed setter,
+  require software-model postflight, never retry an uncertain requested
+  mutation, and compensate only when the first postflight observed the requested
+  choice and a fresh same-identity proof still observes it while the original
+  remains safe. Do not overwrite external restoration, an immediate or
+  intervening third choice, or an unavailable original choice.
+- Profile selection may rebuild the software graph and change a signal path;
+  port selection may change one signal path. Neither capability may start
+  playback/capture, change defaults or policy, prove audibility, claim hardware
+  readback or claim exact hardware rollback. Keep raw names, acknowledgements,
+  cohorts and setter construction out of Qt projections and QML.
 - GoXLR presence/status is read-only. Invoke only fixed production
   `/usr/bin/synapse-goxlr provider-status --format json`, bound execution and
   output, strictly validate the complete provider contract, then discard raw

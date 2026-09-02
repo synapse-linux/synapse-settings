@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -396,12 +397,40 @@ static void audio_goxlr_capture_free(audio_goxlr_capture *capture) {
 }
 
 static int audio_goxlr_now_ms(int64_t *value) {
-  struct timespec now;
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+  struct timespec now = {0};
+  if (!value || clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 ||
+      now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
+      (uint64_t)now.tv_sec > (uint64_t)INT64_MAX / 1000U)
     return 0;
-  if (now.tv_sec < 0 || (uint64_t)now.tv_sec > (uint64_t)INT64_MAX / 1000U)
+  int64_t milliseconds = (int64_t)now.tv_sec * 1000;
+  int64_t fraction = now.tv_nsec / 1000000;
+  if (milliseconds > INT64_MAX - fraction)
     return 0;
-  *value = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+  *value = milliseconds + fraction;
+  return 1;
+}
+
+static int audio_goxlr_pipe_above_standard(int descriptors[2]) {
+  for (size_t index = 0; index < 2U; index++) {
+    if (descriptors[index] > STDERR_FILENO)
+      continue;
+    int replacement =
+        fcntl(descriptors[index], F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (replacement < 0)
+      return 0;
+    close(descriptors[index]);
+    descriptors[index] = replacement;
+  }
+  return 1;
+}
+
+static int audio_goxlr_pipe_close_on_exec(const int descriptors[2]) {
+  for (size_t index = 0; index < 2U; index++) {
+    int flags = fcntl(descriptors[index], F_GETFD);
+    if (flags < 0 ||
+        fcntl(descriptors[index], F_SETFD, flags | FD_CLOEXEC) != 0)
+      return 0;
+  }
   return 1;
 }
 
@@ -434,6 +463,13 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
     capture.failed = 1;
     return capture;
   }
+  if (!audio_goxlr_pipe_above_standard(descriptors) ||
+      !audio_goxlr_pipe_close_on_exec(descriptors)) {
+    close(descriptors[0]);
+    close(descriptors[1]);
+    capture.failed = 1;
+    return capture;
+  }
   int launch_descriptors[2];
   if (pipe(launch_descriptors) != 0) {
     close(descriptors[0]);
@@ -441,9 +477,8 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
     capture.failed = 1;
     return capture;
   }
-  int launch_flags = fcntl(launch_descriptors[1], F_GETFD);
-  if (launch_flags < 0 ||
-      fcntl(launch_descriptors[1], F_SETFD, launch_flags | FD_CLOEXEC) < 0) {
+  if (!audio_goxlr_pipe_above_standard(launch_descriptors) ||
+      !audio_goxlr_pipe_close_on_exec(launch_descriptors)) {
     close(descriptors[0]);
     close(descriptors[1]);
     close(launch_descriptors[0]);
@@ -451,6 +486,7 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
     capture.failed = 1;
     return capture;
   }
+  const pid_t parent = getpid();
   pid_t child = fork();
   if (child < 0) {
     close(descriptors[0]);
@@ -462,13 +498,15 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
   }
   if (child == 0) {
     close(launch_descriptors[0]);
-    if (setpgid(0, 0) != 0 || dup2(descriptors[1], STDOUT_FILENO) < 0)
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent ||
+        setpgid(0, 0) != 0 || dup2(descriptors[1], STDOUT_FILENO) < 0)
       audio_goxlr_child_fail(launch_descriptors[1], 126);
-    int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    int null_fd = open("/dev/null", O_RDWR);
     if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0 ||
         dup2(null_fd, STDERR_FILENO) < 0)
       audio_goxlr_child_fail(launch_descriptors[1], 126);
-    close(null_fd);
+    if (null_fd > STDERR_FILENO)
+      close(null_fd);
     close(descriptors[0]);
     close(descriptors[1]);
     if (setenv("LC_ALL", "C", 1) != 0 || setenv("LANG", "C", 1) != 0)
@@ -574,8 +612,11 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
     capture.status = capture.timed_out ? 124 : -1;
   } else if (waited != child || !WIFEXITED(wait_status)) {
     capture.status = -1;
+    (void)kill(-child, SIGKILL);
   } else {
     capture.status = WEXITSTATUS(wait_status);
+    if (capture.status != 0)
+      (void)kill(-child, SIGKILL);
   }
 
   unsigned char launch_marker = 0U;
@@ -589,6 +630,16 @@ static audio_goxlr_capture audio_goxlr_capture_status(const char *binary) {
     capture.launch_failed = 1;
   else if (launch_count < 0 && !capture.timed_out && !capture.too_large)
     capture.failed = 1;
+  if (!capture.timed_out && !capture.too_large && !capture.failed) {
+    int64_t completed_at = 0;
+    if (!audio_goxlr_now_ms(&completed_at)) {
+      capture.failed = 1;
+      capture.status = -1;
+    } else if (completed_at >= deadline) {
+      capture.timed_out = 1;
+      capture.status = 124;
+    }
+  }
   capture.data[capture.size] = '\0';
   return capture;
 }

@@ -17,6 +17,11 @@ TestCase {
         property var audioInputs: []
         property var audioStreams: []
         property var audioCards: []
+        property bool audioProfilePortAvailable: true
+        property bool audioProfilePortMutationAvailable: true
+        property string audioProfilePortReason: ""
+        property var audioProfileCards: []
+        property var audioPortEndpoints: []
         property var audioRouteRules: []
         property bool audioRouteBrokerAvailable: true
         property bool audioRouteBrokerActive: false
@@ -29,12 +34,23 @@ TestCase {
         property var audioGoxlrDevices: [{ model: "GoXLR Mini", systemOutputSupported: true }]
         property var audioProcessChoices: []
         property bool audioProcessChoiceOpen: false
+        property bool audioSelectionConfirmationOpen: false
+        property string audioSelectionKind: ""
+        property string audioSelectionTargetLabel: ""
+        property string audioSelectionOriginalLabel: ""
+        property string audioSelectionRequestedLabel: ""
         property string audioStatusId: ""
         property string audioErrorId: ""
         signal audioProcessChoiceRequested()
+        signal audioSelectionConfirmationRequested()
+        signal audioSelectionChanged()
         function loadAudio() {}
         function setAudioVolume(target, percent) {}
         function setAudioMuted(target, muted) {}
+        function planAudioProfile(card, profile) {}
+        function planAudioPort(direction, device, port) {}
+        function confirmAudioSelection() {}
+        function cancelAudioSelection() {}
     }
 
     Component {
@@ -63,11 +79,18 @@ TestCase {
         compare(typeof AudioBackend.moveAudioStream, "function")
         compare(typeof AudioBackend.setAudioVolume, "function")
         compare(typeof AudioBackend.setAudioMuted, "function")
+        compare(typeof AudioBackend.planAudioProfile, "function")
+        compare(typeof AudioBackend.planAudioPort, "function")
+        compare(typeof AudioBackend.confirmAudioSelection, "function")
+        compare(typeof AudioBackend.cancelAudioSelection, "function")
         compare(typeof AudioBackend.chooseAudioProcessRule, "function")
         compare(typeof AudioBackend.chooseAudioExecutableRule, "function")
         compare(typeof AudioBackend.chooseAudioDirectoryRule, "function")
         compare(typeof AudioBackend.audioGoxlrStatus, "string")
         compare(typeof AudioBackend.audioGoxlrDevices, "object")
+        compare(typeof AudioBackend.audioProfileCards, "object")
+        compare(typeof AudioBackend.audioPortEndpoints, "object")
+        compare(typeof AudioBackend.audioProfilePortAvailable, "boolean")
         compare(shellHost.loaded, false)
         compare(shellHost.contentLoaded, false)
     }
@@ -103,6 +126,12 @@ TestCase {
         compare(AudioBackend.audioOutputs.length, 1)
         compare(AudioBackend.audioInputs.length, 1)
         compare(AudioBackend.audioStreams.length, 0)
+        compare(AudioBackend.audioProfilePortAvailable, true)
+        compare(AudioBackend.audioProfileCards.length, 1)
+        compare(AudioBackend.audioProfileCards[0].activeProfileLabel, "High Fidelity")
+        compare(AudioBackend.audioPortEndpoints.length, 2)
+        compare(typeof AudioBackend.audioProfileCards[0].rawName, "undefined")
+        compare(typeof AudioBackend.audioProfileCards[0].profiles[0].rawName, "undefined")
         shellHost.active = false
         tryCompare(shellHost, "contentLoaded", false, 10000)
         compare(shellHost.loaded, true)

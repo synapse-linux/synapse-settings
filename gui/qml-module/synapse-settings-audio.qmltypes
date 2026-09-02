@@ -19,6 +19,11 @@ Module {
         Property { name: "audioInputs"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioStreams"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioCards"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioProfilePortAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioProfilePortMutationAvailable"; type: "bool"; isReadonly: true }
+        Property { name: "audioProfilePortReason"; type: "string"; isReadonly: true }
+        Property { name: "audioProfileCards"; type: "QVariantList"; isReadonly: true }
+        Property { name: "audioPortEndpoints"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioRouteRules"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioRouteBrokerAvailable"; type: "bool"; isReadonly: true }
         Property { name: "audioRouteBrokerActive"; type: "bool"; isReadonly: true }
@@ -31,13 +36,20 @@ Module {
         Property { name: "audioGoxlrDevices"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioProcessChoices"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioProcessChoiceOpen"; type: "bool"; isReadonly: true }
+        Property { name: "audioSelectionConfirmationOpen"; type: "bool"; isReadonly: true }
+        Property { name: "audioSelectionKind"; type: "string"; isReadonly: true }
+        Property { name: "audioSelectionTargetLabel"; type: "string"; isReadonly: true }
+        Property { name: "audioSelectionOriginalLabel"; type: "string"; isReadonly: true }
+        Property { name: "audioSelectionRequestedLabel"; type: "string"; isReadonly: true }
         Property { name: "audioStatusId"; type: "string"; isReadonly: true }
         Property { name: "audioErrorId"; type: "string"; isReadonly: true }
         Signal { name: "audioStateChanged" }
         Signal { name: "audioModelsChanged" }
         Signal { name: "audioProcessChoiceChanged" }
+        Signal { name: "audioSelectionChanged" }
         Signal { name: "audioOperationStateChanged" }
         Signal { name: "audioProcessChoiceRequested" }
+        Signal { name: "audioSelectionConfirmationRequested" }
         Signal {
             name: "audioLoaded"
             Parameter { name: "success"; type: "bool" }
@@ -72,6 +84,21 @@ Module {
             Parameter { name: "targetId"; type: "string" }
             Parameter { name: "muted"; type: "bool" }
         }
+        Method {
+            name: "planAudioProfile"
+            type: "bool"
+            Parameter { name: "cardId"; type: "string" }
+            Parameter { name: "profileId"; type: "string" }
+        }
+        Method {
+            name: "planAudioPort"
+            type: "bool"
+            Parameter { name: "direction"; type: "string" }
+            Parameter { name: "deviceId"; type: "string" }
+            Parameter { name: "portId"; type: "string" }
+        }
+        Method { name: "confirmAudioSelection"; type: "bool" }
+        Method { name: "cancelAudioSelection" }
         Method {
             name: "chooseAudioProcessRule"
             type: "bool"

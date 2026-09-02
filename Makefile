@@ -7,7 +7,7 @@ DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 QMLDIR ?= $(LIBDIR)/qt6/qml
 BUILD_DIR ?= build
-VERSION := 0.9.0-alpha.1
+VERSION := 1.0.0-alpha.1
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_SETTINGS_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
@@ -15,9 +15,10 @@ BASE_CFLAGS = -O2 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 BASE_CXXFLAGS = -O2 -g -std=c++17 -Wall -Wextra -Wpedantic -Werror \
 	-fstack-protector-strong -fPIC -march=x86-64 -mtune=generic
 BASE_LDFLAGS = -Wl,-z,relro,-z,now -pie
-REPRO_FLAGS = -ffile-prefix-map=$(CURDIR)=. \
-	-fdebug-prefix-map=$(CURDIR)=. -fmacro-prefix-map=$(CURDIR)=. \
-	-ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
+REPRO_FLAGS = -ffile-prefix-map=$(BUILD_DIR)=build \
+	-fdebug-prefix-map=$(BUILD_DIR)=build -fmacro-prefix-map=$(BUILD_DIR)=build \
+	-ffile-prefix-map=$(CURDIR)=. -fdebug-prefix-map=$(CURDIR)=. \
+	-fmacro-prefix-map=$(CURDIR)=. -ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
 	-fdebug-prefix-map=$(abspath $(BUILD_DIR))=build \
 	-fmacro-prefix-map=$(abspath $(BUILD_DIR))=build
 
@@ -46,6 +47,7 @@ QT6_LIBEXECS := $(shell $(QMAKE6) -query QT_HOST_LIBEXECS 2>/dev/null)
 MOC6 ?= $(QT6_LIBEXECS)/moc
 RCC6 ?= $(QT6_LIBEXECS)/rcc
 LRELEASE6 ?= lrelease6
+LUPDATE6 ?= lupdate6
 QMLLINT ?= /usr/lib/qt6/bin/qmllint
 QMLTESTRUNNER ?= /usr/lib/qt6/bin/qmltestrunner
 GUI_PACKAGES := Qt6Core Qt6Gui Qt6Qml Qt6Quick Qt6QuickControls2 Qt6Widgets
@@ -69,8 +71,9 @@ endif
 
 AUDIO_SOURCES := src/audio.c src/audio_policy.c src/audio_broker_status.c
 SETTINGS_AUDIO_SOURCES := src/audio_goxlr_status.c
-SETTINGS_AUDIO_CPPFLAGS := -DSYNAPSE_SETTINGS_WITH_GOXLR_STATUS=1
-AUDIO_INTERNALS := src/audio_control.inc
+SETTINGS_AUDIO_CPPFLAGS := -DSYNAPSE_SETTINGS_WITH_GOXLR_STATUS=1 \
+	-DSYNAPSE_SETTINGS_WITH_PROFILE_PORT=1
+AUDIO_INTERNALS := src/audio_control.inc src/audio_profile_port.inc
 ISA_NOTE_SOURCE := src/x86_64_baseline_note.c
 ISA_NOTE_SCRIPT := src/x86_64_baseline_note.ld
 ISA_NOTE_LDFLAGS := -Wl,-T,$(abspath $(ISA_NOTE_SCRIPT))
@@ -88,8 +91,15 @@ GUI_ISA_NOTE_OBJECT := $(BUILD_DIR)/x86_64_baseline_note.o
 GUI_MOC := $(BUILD_DIR)/moc_audio_adapter.cpp $(BUILD_DIR)/moc_localization.cpp
 GUI_QML := gui/qml/Main.qml gui/qml/AudioSettings.qml \
 	gui/qml/AudioSettingsSection.qml gui/qml/AudioShellHost.qml
-GUI_QM := $(BUILD_DIR)/i18n/synapse-settings_en_US.qm \
-	$(BUILD_DIR)/i18n/synapse-settings_it_IT.qm
+GUI_LOCALES := ar as ast az az_AZ be bg bn ca ca@valencia cs_CZ da de el \
+	en_US en_GB eo es es_AR es_MX et eu fa fi_FI fr fur gl he hi hr hu \
+	ia id is it_IT ja ka ko lt ml mr nb nl oc pl pt_BR pt_PT ro ru si sk \
+	sl sq sr sr@latin sv tg th tr_TR uk uz vi zh_CN zh_TW
+GUI_COMPLETE_LOCALES := en_US it_IT
+GUI_FALLBACK_LOCALES := $(filter-out $(GUI_COMPLETE_LOCALES),$(GUI_LOCALES))
+GUI_COMPLETE_QM := $(addprefix $(BUILD_DIR)/i18n/synapse-settings_,$(addsuffix .qm,$(GUI_COMPLETE_LOCALES)))
+GUI_FALLBACK_QM := $(addprefix $(BUILD_DIR)/i18n/synapse-settings_,$(addsuffix .qm,$(GUI_FALLBACK_LOCALES)))
+GUI_QM := $(GUI_COMPLETE_QM) $(GUI_FALLBACK_QM)
 GUI_QRC_FILE := $(BUILD_DIR)/resources.qrc
 GUI_RCC := $(BUILD_DIR)/qrc_resources.cpp
 GUI_PLUGIN := $(BUILD_DIR)/libsynapse_settings_audio_qml.so
@@ -191,28 +201,35 @@ $(BUILD_DIR)/moc_localization.cpp: gui/localization.h | $(BUILD_DIR)
 $(GUI_PLUGIN_MOC): gui/audio_qml_plugin.h | $(BUILD_DIR)
 	"$(MOC6)" -f audio_qml_plugin.h -o "$@" "$<"
 
-$(BUILD_DIR)/i18n/%.qm: gui/i18n/%.ts | $(BUILD_DIR)
+$(GUI_COMPLETE_QM): $(BUILD_DIR)/i18n/%.qm: gui/i18n/%.ts | $(BUILD_DIR)
 	install -d -m 0755 "$(BUILD_DIR)/i18n"
 	"$(LRELEASE6)" -silent -fail-on-unfinished -fail-on-invalid "$<" -qm "$@"
 
-$(GUI_QRC_FILE): $(GUI_QML) $(GUI_QM) | $(BUILD_DIR)
+$(GUI_FALLBACK_QM): $(BUILD_DIR)/i18n/%.qm: gui/i18n/%.ts | $(BUILD_DIR)
+	install -d -m 0755 "$(BUILD_DIR)/i18n"
+	"$(LRELEASE6)" -silent -fail-on-invalid "$<" -qm "$@"
+
+$(GUI_QRC_FILE): $(GUI_QML) $(GUI_QM) Makefile | $(BUILD_DIR)
 	printf '%s\n' '<!DOCTYPE RCC><RCC version="1.0"><qresource prefix="/">' \
 		'<file alias="qml/Main.qml">$(abspath gui/qml/Main.qml)</file>' \
 		'<file alias="qml/AudioSettings.qml">$(abspath gui/qml/AudioSettings.qml)</file>' \
 		'<file alias="qml/AudioSettingsSection.qml">$(abspath gui/qml/AudioSettingsSection.qml)</file>' \
 		'<file alias="qml/AudioShellHost.qml">$(abspath gui/qml/AudioShellHost.qml)</file>' \
-		'<file alias="i18n/synapse-settings_en_US.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_en_US.qm)</file>' \
-		'<file alias="i18n/synapse-settings_it_IT.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_it_IT.qm)</file>' \
-		'</qresource></RCC>' >"$@"
+		>"$@"
+	for locale in $(GUI_LOCALES); do \
+		printf '%s\n' "<file alias=\"i18n/synapse-settings_$${locale}.qm\">$(abspath $(BUILD_DIR))/i18n/synapse-settings_$${locale}.qm</file>"; \
+	done >>"$@"
+	printf '%s\n' '</qresource></RCC>' >>"$@"
 
 $(GUI_RCC): $(GUI_QRC_FILE) | $(BUILD_DIR)
 	"$(RCC6)" -o "$@" "$<"
 
-$(GUI_PLUGIN_QRC_FILE): $(GUI_QM) | $(BUILD_DIR)
-	printf '%s\n' '<!DOCTYPE RCC><RCC version="1.0"><qresource prefix="/">' \
-		'<file alias="i18n/synapse-settings_en_US.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_en_US.qm)</file>' \
-		'<file alias="i18n/synapse-settings_it_IT.qm">$(abspath $(BUILD_DIR)/i18n/synapse-settings_it_IT.qm)</file>' \
-		'</qresource></RCC>' >"$@"
+$(GUI_PLUGIN_QRC_FILE): $(GUI_QM) Makefile | $(BUILD_DIR)
+	printf '%s\n' '<!DOCTYPE RCC><RCC version="1.0"><qresource prefix="/">' >"$@"
+	for locale in $(GUI_LOCALES); do \
+		printf '%s\n' "<file alias=\"i18n/synapse-settings_$${locale}.qm\">$(abspath $(BUILD_DIR))/i18n/synapse-settings_$${locale}.qm</file>"; \
+	done >>"$@"
+	printf '%s\n' '</qresource></RCC>' >>"$@"
 
 $(GUI_PLUGIN_RCC): $(GUI_PLUGIN_QRC_FILE) | $(BUILD_DIR)
 	"$(RCC6)" -name synapse_settings_audio_qml -o "$@" "$<"
@@ -292,6 +309,7 @@ test: $(TEST_BINARY) $(BROKER_TEST_BINARY)
 
 test-gui:
 ifeq ($(GUI_ENABLED),1)
+	LUPDATE6="$(LUPDATE6)" python3 ./tests/localization-run.py
 	$(MAKE) --no-print-directory "$(GUI_BINARY)" "$(GUI_TEST_BINARY)" \
 		"$(GUI_MODULE_STAMP)" "$(GUI_TEST_MODULE_STAMP)" BUILD_GUI=1
 	"$(QMLLINT)" -I "$(GUI_MODULE_ROOT)" gui/qml/Main.qml \
@@ -318,6 +336,8 @@ test-all: all test test-gui
 		"$(GUI_BINARY)" "$(GUI_PLUGIN)"
 	./tests/audio-goxlr-production-boundary.sh "$(BINARY)" "$(TEST_BINARY)" \
 		"$(BROKER_BINARY)"
+	./tests/audio-profile-port-production-boundary.sh "$(BINARY)" \
+		"$(TEST_BINARY)" "$(BROKER_BINARY)"
 
 install: $(ALL_TARGETS)
 	install -D -m 0755 "$(BINARY)" "$(DESTDIR)$(BINDIR)/synapse-settings"

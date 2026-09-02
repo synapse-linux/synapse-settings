@@ -1,12 +1,22 @@
 # JSON contracts
 
 All contracts are UTF-8, locale-independent and versioned. Unknown input-policy
-fields fail closed.
+fields fail closed. At the raw PipeWire-Pulse boundary, C11 validates strict JSON
+syntax, UTF-8, decoded-key uniqueness, document completion, 64-level nesting,
+4096 keys per object and 16384 keys per document before `json-c` decoding. Raw
+or escaped NUL, malformed escapes or surrogates, invalid literals/numbers,
+trailing commas/data and the first byte beyond 1 MiB fail closed; exact limits
+and valid surrogate pairs are accepted. Before Qt JSON decoding, the adapter
+independently enforces the same strict lexical grammar, decoded-key uniqueness,
+UTF-8 round trip, completion, nesting and key-count boundaries.
 
 | Schema | Purpose |
 |---|---|
 | `synapse.settings.sections/v2` | Lazy Settings section inventory |
-| `synapse.settings.audio-inventory/v1` | Bounded outputs, inputs, streams and cards |
+| `synapse.settings.audio-inventory/v2` | Bounded outputs, inputs, streams and cards with opaque active-profile tokens |
+| `synapse.settings.audio-profile-port-inventory/v1` | Bounded card-profile and physical endpoint-port choices |
+| `synapse.settings.audio-profile-port-plan/v1` | Read-only one-target profile or port plan |
+| `synapse.settings.audio-profile-port-receipt/v1` | Verified profile/port selection or compensation result |
 | `synapse.settings.audio-default-plan/v1` | Read-only default-device plan |
 | `synapse.settings.audio-default-receipt/v1` | Verified default-device transaction |
 | `synapse.settings.audio-control-plan/v1` | Read-only one-target volume or mute plan |
@@ -27,9 +37,62 @@ proves a broker move. The resolution contract returns one
 of `exact-executable`, `directory-prefix`, or `system-default` and separately
 reports whether the selected endpoint is currently available.
 
-Opaque Audio IDs are scoped by direction (`output-…` or `input-…`). Stream IDs
-are bounded `playback-N` or `recording-N` tokens and must be unique within one
-inventory cohort. Raw backend node names are never public contract fields.
+Opaque Audio IDs are scoped by direction (`output-…` or `input-…`). Cards are
+`card-…`; base inventory v2 carries an opaque owner-scoped `profile-…` active
+selection rather than a raw backend profile name. Stream IDs are bounded
+`playback-N` or `recording-N` tokens and must be unique within one inventory
+cohort. Raw backend node and choice names are never public contract fields.
+Backend indexes must be exact nonnegative JSON integers through `INT_MAX` and
+unique within their raw inventories. Invalid nonempty default sink/source raw
+identities clear the complete inventory; an empty string means no named default.
+Present mute/volume/property fields retain exact types, volume channels are
+integers through `UINT32_MAX` with checked aggregation, and present application
+or media labels are bounded strings. Missing optional fields retain only their
+defined fallbacks; malformed process identity disables process-bound rule
+selection.
+
+The profile/port inventory is independent from base inventory and fixes
+`stateAuthority=pipewire-pulse-model`, `hardwareReadback=false` and
+`hardwareExactRollback=false`. It carries at most 32 cards, 128 endpoints, 64
+choices per target, 512 profiles and 512 ports. A choice has one owner-scoped
+`profile-…` or `port-…` identity, bounded label and availability of `available`,
+`unknown` or `unavailable`. A missing backend label remains an empty presentation
+string rather than falling back to a raw identity. Unknown remains selectable;
+unavailable never appears in an accepted plan. The raw 64-input limit applies
+before monitor filtering. Every excluded monitor must still validate its raw
+identity, index, metadata, label, choices, availability, active selection and
+identity collisions; its choices consume the global port budget. Omitted
+`profiles` or `ports` fields mean no advertised choices. When present,
+PulseAudio 17 card `profiles` must be an object keyed by the raw profile name,
+with an optional boolean `available`; endpoint `ports` must be an array of
+objects with a bounded `name` and optional C-locale `availability` string equal
+to `available`, `availability unknown` or `not available`. These backend values
+normalize to the public three-state availability above. A present collection or
+availability value cannot be null. Null active selections require null active
+labels and disable mutation for that target. An unavailable inventory has a
+bounded reason, no targets and no mutation availability.
+
+The profile/port plan fixes `status=Planned`, `singleTarget=true`,
+`postflightRequired=true`, `rollbackOnUnverified=true`, `applied=false`, and the
+exact acknowledgement `synapse-settings/audio-profile-port/v1`. Its
+`selection-…` cohort binds the private target name/index, target kind, exact
+original/requested owner-scoped choices and requested availability. A profile
+uses a card and profile tokens with `graphMayChange=true`; a port uses a matching
+output/input and port tokens with `graphMayChange=false`. Both set
+`signalPathMayChange=true` while playback, capture, default-device changes,
+policy changes, audibility verification, hardware readback and exact hardware
+rollback remain false.
+
+The receipt is `Applied`, `AlreadySet`, `Refused` or `Failed`. It separately
+reports requested-state verification and compensation attempt/verification.
+Only a verified changed profile or port may set its corresponding change flag.
+Refusal cannot claim a mutation; failure cannot claim a requested change;
+`rollback-failed` requires an actual unverified compensation attempt. A verified
+compensation is permitted only for mutation timeout/failure or requested-state
+verification failure, only after the first postflight observed the requested
+selection, and only while a fresh same-identity read still observes it. An
+immediate or intervening third selection is never overwritten.
+Target/direction/choice shapes and change-kind invariants remain exact.
 
 The control plan fixes `status=Planned`, `singleTarget=true`,
 `safeVolumeMaximumPercent=100`, `postflightRequired=true`,
@@ -84,10 +147,11 @@ match the device array. Each device contains only a redacted `goxlr-1` through
 
 The C11 bridge accepts only the complete upstream
 `synapse.goxlr.provider-status/v2` contract and discards route, volume, fader,
-mute, mix and submix values after validation. The Qt adapter validates exact
-field sets, bounds, token forms, duplicate identities, direction/device
-consistency and honest authority flags before publishing any projection. It
-strips the GoXLR device token before QML publication. It invokes only the C11
+mute, mix and submix values after validation. The Qt adapter validates exact field sets, bounds, token forms, duplicate
+identities, direction/device/owner consistency, active-selection agreement and
+honest authority flags before publishing any projection. It strips the GoXLR
+device token before QML publication and never forwards profile/port cohorts or
+acknowledgements. It invokes only the C11
 `audio broker-status` and `audio goxlr-status` clients and never forwards raw
 contract objects, socket paths, provider profile values or transport text to
 QML.

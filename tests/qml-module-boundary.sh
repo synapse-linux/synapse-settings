@@ -16,6 +16,11 @@ grep -Fq 'isSingleton: true' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'exports: ["AudioBackend 1.0"]' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "setAudioVolume"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "setAudioMuted"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "planAudioProfile"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "planAudioPort"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "confirmAudioSelection"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "audioProfileCards"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "audioPortEndpoints"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "audioGoxlrStatus"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "audioGoxlrDevices"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'readonly property string goxlrStatus:' "$module/AudioShellHost.qml"
@@ -33,7 +38,7 @@ while IFS= read -r import_line; do
     *) printf 'unexpected feature import: %s\n' "$import_line" >&2; exit 1 ;;
   esac
 done < <(grep -h '^import ' "$module"/*.qml)
-if grep -Eiq 'Quickshell|hyprctl|pactl|/proc|SO_PEERCRED|status-v1|cohort|acknowledgement|SYNAPSE_|QProcess|JSON\.parse|environment|argv' \
+if grep -Eiq 'Quickshell|hyprctl|pactl|/proc|SO_PEERCRED|status-v1|cohort|acknowledgement|requiresAcknowledgement|raw(Name|Profile|Port)|set-(card-profile|sink-port|source-port)|SYNAPSE_|QProcess|JSON\.parse|environment|argv' \
     "$module"/*.qml; then
   printf 'forbidden transport or authority detail in feature QML\n' >&2
   exit 1

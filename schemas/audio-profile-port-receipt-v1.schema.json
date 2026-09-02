@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapseos.dev/schemas/settings/audio-profile-port-receipt-v1.schema.json",
+  "title": "Synapse Settings Audio profile and port receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "reason", "selection", "target", "targetType",
+    "originalSelection", "requestedSelection", "changed",
+    "mutationAttempted", "verified", "rollbackAttempted",
+    "rollbackVerified", "profileChanged", "portChanged", "stateAuthority",
+    "requiresAcknowledgement", "singleTarget", "graphMayChange",
+    "signalPathMayChange", "playbackStarted", "captureStarted",
+    "defaultChanged", "policyChanged", "audibilityVerified", "hardwareReadback",
+    "hardwareExactRollback", "bounded"
+  ],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-profile-port-receipt/v1"},
+    "status": {"enum": ["Applied", "AlreadySet", "Refused", "Failed"]},
+    "reason": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "enum": [
+            "audio-unavailable", "target-vanished",
+            "active-selection-unavailable", "selection-unavailable",
+            "original-selection-mismatch", "selection-cohort-changed",
+            "target-identity-changed", "mutation-timeout",
+            "mutation-failed", "verification-failed",
+            "verification-unavailable", "rollback-failed"
+          ]
+        }
+      ]
+    },
+    "selection": {"enum": ["profile", "port"]},
+    "target": {
+      "type": "string",
+      "pattern": "^(card|output|input)-[0-9a-f]{16}$"
+    },
+    "targetType": {"enum": ["card", "output", "input"]},
+    "originalSelection": {
+      "type": "string",
+      "pattern": "^(profile|port)-[0-9a-f]{16}$"
+    },
+    "requestedSelection": {
+      "type": "string",
+      "pattern": "^(profile|port)-[0-9a-f]{16}$"
+    },
+    "changed": {"type": "boolean"},
+    "mutationAttempted": {"type": "boolean"},
+    "verified": {"type": "boolean"},
+    "rollbackAttempted": {"type": "boolean"},
+    "rollbackVerified": {"type": "boolean"},
+    "profileChanged": {"type": "boolean"},
+    "portChanged": {"type": "boolean"},
+    "stateAuthority": {"const": "pipewire-pulse-model"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-profile-port/v1"},
+    "singleTarget": {"const": true},
+    "graphMayChange": {"type": "boolean"},
+    "signalPathMayChange": {"const": true},
+    "playbackStarted": {"const": false},
+    "captureStarted": {"const": false},
+    "defaultChanged": {"const": false},
+    "policyChanged": {"const": false},
+    "audibilityVerified": {"const": false},
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "bounded": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"selection": {"const": "profile"}}},
+      "then": {
+        "properties": {
+          "target": {"pattern": "^card-[0-9a-f]{16}$"},
+          "targetType": {"const": "card"},
+          "originalSelection": {"pattern": "^profile-[0-9a-f]{16}$"},
+          "requestedSelection": {"pattern": "^profile-[0-9a-f]{16}$"},
+          "graphMayChange": {"const": true},
+          "portChanged": {"const": false}
+        }
+      },
+      "else": {
+        "properties": {
+          "target": {"pattern": "^(output|input)-[0-9a-f]{16}$"},
+          "targetType": {"enum": ["output", "input"]},
+          "originalSelection": {"pattern": "^port-[0-9a-f]{16}$"},
+          "requestedSelection": {"pattern": "^port-[0-9a-f]{16}$"},
+          "graphMayChange": {"const": false},
+          "profileChanged": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "output"}}},
+      "then": {"properties": {"target": {"pattern": "^output-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"targetType": {"const": "input"}}},
+      "then": {"properties": {"target": {"pattern": "^input-[0-9a-f]{16}$"}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "Applied"}}},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": true},
+          "mutationAttempted": {"const": true},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "AlreadySet"}}},
+      "then": {
+        "properties": {
+          "reason": {"type": "null"},
+          "changed": {"const": false},
+          "mutationAttempted": {"const": false},
+          "verified": {"const": true},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false},
+          "profileChanged": {"const": false},
+          "portChanged": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Refused"}}},
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "audio-unavailable", "target-vanished",
+              "active-selection-unavailable", "selection-unavailable",
+              "original-selection-mismatch", "selection-cohort-changed",
+              "target-identity-changed"
+            ]
+          },
+          "changed": {"const": false},
+          "mutationAttempted": {"const": false},
+          "verified": {"const": false},
+          "rollbackAttempted": {"const": false},
+          "rollbackVerified": {"const": false},
+          "profileChanged": {"const": false},
+          "portChanged": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "Failed"}}},
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "target-vanished", "target-identity-changed",
+              "mutation-timeout", "mutation-failed",
+              "verification-failed", "verification-unavailable",
+              "rollback-failed"
+            ]
+          },
+          "changed": {"const": false},
+          "mutationAttempted": {"const": true},
+          "verified": {"const": false},
+          "profileChanged": {"const": false},
+          "portChanged": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Applied"},
+          "selection": {"const": "profile"}
+        }
+      },
+      "then": {"properties": {"profileChanged": {"const": true}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Applied"},
+          "selection": {"const": "port"}
+        }
+      },
+      "then": {"properties": {"portChanged": {"const": true}}}
+    },
+    {
+      "if": {"properties": {"rollbackAttempted": {"const": false}}},
+      "then": {"properties": {"rollbackVerified": {"const": false}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": true}
+        }
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "mutation-timeout", "mutation-failed", "verification-failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": false}
+        }
+      },
+      "then": {"properties": {"reason": {"const": "rollback-failed"}}}
+    },
+    {
+      "if": {"properties": {"reason": {"const": "rollback-failed"}}},
+      "then": {
+        "properties": {
+          "status": {"const": "Failed"},
+          "rollbackAttempted": {"const": true},
+          "rollbackVerified": {"const": false}
+        }
+      }
+    }
+  ]
+}

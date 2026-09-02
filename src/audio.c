@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -30,10 +31,28 @@
 #define AUDIO_STREAM_LIMIT 128U
 #define AUDIO_CARD_LIMIT 32U
 #define AUDIO_LABEL_LIMIT 255U
+#define AUDIO_RAW_IDENTITY_LIMIT 255U
 #define AUDIO_ACK "synapse-settings/audio-default/v1"
 #define AUDIO_STREAM_MOVE_ACK "synapse-settings/audio-existing-stream-move/v1"
 #define AUDIO_CONTROL_ACK "synapse-settings/audio-control/v1"
 #define AUDIO_SAFE_VOLUME_MAXIMUM 100
+
+#ifdef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
+#define AUDIO_PROFILE_PORT_USAGE                                               \
+  "  synapse-settings audio profile-port-inventory [--format text|json]\n"     \
+  "  synapse-settings audio plan-profile --card ID --profile ID "              \
+  "[--format text|json]\n"                                                     \
+  "  synapse-settings audio set-profile --card ID --from-profile ID "          \
+  "--profile ID --cohort ID --ack synapse-settings/audio-profile-port/v1 "     \
+  "[--format text|json]\n"                                                     \
+  "  synapse-settings audio plan-port --direction output|input --device ID "   \
+  "--port ID [--format text|json]\n"                                           \
+  "  synapse-settings audio set-port --direction output|input --device ID "    \
+  "--from-port ID --port ID --cohort ID --ack "                                \
+  "synapse-settings/audio-profile-port/v1 [--format text|json]\n"
+#else
+#define AUDIO_PROFILE_PORT_USAGE ""
+#endif
 
 typedef struct {
   char raw_name[SETTINGS_FIELD_LIMIT + 1U];
@@ -62,7 +81,9 @@ typedef struct {
   char raw_name[SETTINGS_FIELD_LIMIT + 1U];
   char id[32];
   char label[AUDIO_LABEL_LIMIT + 1U];
-  char active_profile[AUDIO_LABEL_LIMIT + 1U];
+  char active_profile[AUDIO_RAW_IDENTITY_LIMIT + 1U];
+  char active_profile_token[32];
+  int index;
 } audio_card;
 
 typedef struct {
@@ -82,8 +103,11 @@ typedef struct {
 
 typedef struct {
   char *data;
+  size_t length;
   int status;
   int timed_out;
+  int too_large;
+  int failed;
 } capture_result;
 
 static const char *pactl_binary(void) {
@@ -117,7 +141,8 @@ static void audio_usage(FILE *out) {
         "  synapse-settings audio plan-default --direction output|input "
         "--device ID [--format text|json]\n"
         "  synapse-settings audio set-default --direction output|input "
-        "--device ID --ack " AUDIO_ACK " [--format text|json]\n"
+        "--device ID --ack " AUDIO_ACK
+        " [--format text|json]\n" AUDIO_PROFILE_PORT_USAGE
         "  synapse-settings audio plan-volume --target ID --percent 0..100 "
         "[--format text|json]\n"
         "  synapse-settings audio set-volume --target ID --from-percent "
@@ -155,6 +180,138 @@ static int copy_bounded(char *target, size_t size, const char *value) {
   return 0;
 }
 
+static int audio_utf8_valid(const unsigned char *bytes, size_t length) {
+  size_t index = 0;
+  while (index < length) {
+    unsigned char first = bytes[index++];
+    if (first < 0x80U)
+      continue;
+    if (first >= 0xc2U && first <= 0xdfU) {
+      if (index >= length || (bytes[index] & 0xc0U) != 0x80U)
+        return 0;
+      index++;
+      continue;
+    }
+    if (first >= 0xe0U && first <= 0xefU) {
+      if (index + 1U >= length)
+        return 0;
+      unsigned char second = bytes[index++];
+      unsigned char third = bytes[index++];
+      if ((second & 0xc0U) != 0x80U || (third & 0xc0U) != 0x80U ||
+          (first == 0xe0U && second < 0xa0U) ||
+          (first == 0xedU && second >= 0xa0U))
+        return 0;
+      continue;
+    }
+    if (first >= 0xf0U && first <= 0xf4U) {
+      if (index + 2U >= length)
+        return 0;
+      unsigned char second = bytes[index++];
+      unsigned char third = bytes[index++];
+      unsigned char fourth = bytes[index++];
+      if ((second & 0xc0U) != 0x80U || (third & 0xc0U) != 0x80U ||
+          (fourth & 0xc0U) != 0x80U || (first == 0xf0U && second < 0x90U) ||
+          (first == 0xf4U && second >= 0x90U))
+        return 0;
+      continue;
+    }
+    return 0;
+  }
+  return 1;
+}
+
+static int audio_raw_identity_valid(const char *value) {
+  if (!value || !*value)
+    return 0;
+  size_t length = strlen(value);
+  return length <= AUDIO_RAW_IDENTITY_LIMIT &&
+         audio_utf8_valid((const unsigned char *)value, length);
+}
+
+static const char *audio_json_bounded_string(json_object *object,
+                                             const char *key, int allow_missing,
+                                             size_t maximum, int *valid) {
+  json_object *value = NULL;
+  *valid = 0;
+  if (!object || !json_object_object_get_ex(object, key, &value)) {
+    if (allow_missing) {
+      *valid = 1;
+      return NULL;
+    }
+    return NULL;
+  }
+  if (json_object_is_type(value, json_type_null) && allow_missing) {
+    *valid = 1;
+    return NULL;
+  }
+  if (!json_object_is_type(value, json_type_string))
+    return NULL;
+  const char *text = json_object_get_string(value);
+  int encoded_length = json_object_get_string_len(value);
+  if (!text || encoded_length < 0 || (size_t)encoded_length > maximum ||
+      strlen(text) != (size_t)encoded_length ||
+      !audio_utf8_valid((const unsigned char *)text, (size_t)encoded_length))
+    return NULL;
+  *valid = 1;
+  return text;
+}
+
+static const char *audio_json_optional_bounded_string(json_object *object,
+                                                      const char *key,
+                                                      size_t maximum,
+                                                      int *valid) {
+  json_object *value = NULL;
+  if (!valid)
+    return NULL;
+  *valid = 0;
+  if (!object || !key)
+    return NULL;
+  if (!json_object_object_get_ex(object, key, &value)) {
+    *valid = 1;
+    return NULL;
+  }
+  return audio_json_bounded_string(object, key, 0, maximum, valid);
+}
+
+static int audio_json_index(json_object *object, const char *key, int *index) {
+  json_object *value = NULL;
+  if (!object || !key || !index ||
+      !json_object_object_get_ex(object, key, &value) ||
+      !json_object_is_type(value, json_type_int))
+    return -1;
+  int64_t parsed = json_object_get_int64(value);
+  if (parsed < 0 || parsed > INT_MAX)
+    return -1;
+  *index = (int)parsed;
+  return 0;
+}
+
+static int audio_source_is_monitor(json_object *object, int *is_monitor) {
+  if (!object || !is_monitor)
+    return -1;
+  *is_monitor = 0;
+  json_object *value = NULL;
+  if (json_object_object_get_ex(object, "monitor_of_sink", &value)) {
+    if (!json_object_is_type(value, json_type_null)) {
+      if (!json_object_is_type(value, json_type_int))
+        return -1;
+      int64_t parsed = json_object_get_int64(value);
+      if (parsed < 0 || parsed > INT_MAX)
+        return -1;
+      *is_monitor = 1;
+    }
+  }
+  int valid = 0;
+  const char *monitor_source = audio_json_optional_bounded_string(
+      object, "monitor_source", AUDIO_RAW_IDENTITY_LIMIT, &valid);
+  if (!valid || (monitor_source && *monitor_source &&
+                 !audio_raw_identity_valid(monitor_source)))
+    return -1;
+  if (monitor_source && *monitor_source)
+    *is_monitor = 1;
+  return 0;
+}
+
 static int copy_label(char *target, size_t size, const char *value) {
   if (!value)
     value = "";
@@ -172,58 +329,57 @@ static int copy_label(char *target, size_t size, const char *value) {
   return 0;
 }
 
-static const char *json_string_value(json_object *object, const char *key,
-                                     const char *fallback) {
+static int audio_optional_bool(json_object *object, const char *key,
+                               int fallback, int *result) {
+  if (!object || !key || !result)
+    return -1;
   json_object *value = NULL;
-  if (!object || !json_object_object_get_ex(object, key, &value) ||
-      !json_object_is_type(value, json_type_string))
-    return fallback;
-  const char *text = json_object_get_string(value);
-  return text ? text : fallback;
-}
-
-static int json_int_value(json_object *object, const char *key, int fallback) {
-  json_object *value = NULL;
-  if (!object || !json_object_object_get_ex(object, key, &value) ||
-      !json_object_is_type(value, json_type_int))
-    return fallback;
-  return json_object_get_int(value);
-}
-
-static int json_bool_value(json_object *object, const char *key, int fallback) {
-  json_object *value = NULL;
-  if (!object || !json_object_object_get_ex(object, key, &value) ||
-      !json_object_is_type(value, json_type_boolean))
-    return fallback;
-  return json_object_get_boolean(value) ? 1 : 0;
-}
-
-static int volume_percent(json_object *object) {
-  json_object *volume = NULL;
-  if (!json_object_object_get_ex(object, "volume", &volume) ||
-      !json_object_is_type(volume, json_type_object))
+  if (!json_object_object_get_ex(object, key, &value)) {
+    *result = fallback;
     return 0;
+  }
+  if (!json_object_is_type(value, json_type_boolean))
+    return -1;
+  *result = json_object_get_boolean(value) ? 1 : 0;
+  return 0;
+}
+
+static int audio_volume_percent(json_object *object, int *percent) {
+  if (!object || !percent)
+    return -1;
+  *percent = 0;
+  json_object *volume = NULL;
+  if (!json_object_object_get_ex(object, "volume", &volume))
+    return 0;
+  if (!json_object_is_type(volume, json_type_object))
+    return -1;
   int64_t total = 0;
-  size_t count = 0;
+  size_t count = 0U;
   json_object_object_foreach(volume, channel, item) {
     (void)channel;
     json_object *value = NULL;
-    if (json_object_is_type(item, json_type_object) &&
-        json_object_object_get_ex(item, "value", &value) &&
-        json_object_is_type(value, json_type_int)) {
-      total += json_object_get_int64(value);
-      count++;
-    }
+    if (!json_object_is_type(item, json_type_object) ||
+        !json_object_object_get_ex(item, "value", &value) ||
+        !json_object_is_type(value, json_type_int))
+      return -1;
+    int64_t raw = json_object_get_int64(value);
+    if (raw < 0 || (uint64_t)raw > UINT32_MAX || total > INT64_MAX - raw)
+      return -1;
+    total += raw;
+    count++;
   }
-  if (!count)
+  if (count == 0U)
     return 0;
-  int64_t rounded =
-      (total * 100 + (int64_t)count * 32768) / ((int64_t)count * 65536);
-  if (rounded < 0)
-    rounded = 0;
+  if (count > (size_t)(INT64_MAX / 65536))
+    return -1;
+  int64_t denominator = (int64_t)count * 65536;
+  if (total > (INT64_MAX - denominator / 2) / 100)
+    return -1;
+  int64_t rounded = (total * 100 + denominator / 2) / denominator;
   if (rounded > 999)
     rounded = 999;
-  return (int)rounded;
+  *percent = (int)rounded;
+  return 0;
 }
 
 static void capture_free(capture_result *result) {
@@ -231,29 +387,107 @@ static void capture_free(capture_result *result) {
   memset(result, 0, sizeof(*result));
 }
 
+static int audio_now_ms(int64_t *value) {
+  struct timespec now = {0};
+  if (!value || clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0 ||
+      now.tv_nsec < 0 || now.tv_nsec >= 1000000000L ||
+      (uint64_t)now.tv_sec > (uint64_t)INT64_MAX / 1000U)
+    return 0;
+  int64_t milliseconds = (int64_t)now.tv_sec * 1000;
+  int64_t fraction = now.tv_nsec / 1000000;
+  if (milliseconds > INT64_MAX - fraction)
+    return 0;
+  *value = milliseconds + fraction;
+  return 1;
+}
+
+static int audio_pipe_above_standard(int descriptors[2]) {
+  for (size_t index = 0; index < 2U; index++) {
+    if (descriptors[index] > STDERR_FILENO)
+      continue;
+    int replacement =
+        fcntl(descriptors[index], F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (replacement < 0)
+      return 0;
+    close(descriptors[index]);
+    descriptors[index] = replacement;
+  }
+  return 1;
+}
+
+static int audio_pipe_close_on_exec(const int descriptors[2]) {
+  for (size_t index = 0; index < 2U; index++) {
+    int flags = fcntl(descriptors[index], F_GETFD);
+    if (flags < 0 ||
+        fcntl(descriptors[index], F_SETFD, flags | FD_CLOEXEC) != 0)
+      return 0;
+  }
+  return 1;
+}
+
+static void audio_terminate_child_group(pid_t child, int *wait_status) {
+  if (kill(-child, SIGKILL) != 0)
+    (void)kill(child, SIGKILL);
+  for (;;) {
+    pid_t waited = waitpid(child, wait_status, 0);
+    if (waited == child || (waited < 0 && errno != EINTR))
+      break;
+  }
+}
+
 static capture_result capture_command(char *const argv[]) {
   capture_result result = {0};
-  int pipefd[2];
-  if (pipe(pipefd) != 0)
+  int64_t started = 0;
+  if (!audio_now_ms(&started)) {
+    result.failed = 1;
+    result.status = 1;
     return result;
+  }
+  if (started > INT64_MAX - SETTINGS_CAPTURE_TIMEOUT_MS) {
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  const int64_t deadline = started + SETTINGS_CAPTURE_TIMEOUT_MS;
+  int pipefd[2];
+  if (pipe(pipefd) != 0) {
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  if (!audio_pipe_above_standard(pipefd) || !audio_pipe_close_on_exec(pipefd)) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  const pid_t parent = getpid();
   pid_t child = fork();
   if (child < 0) {
     close(pipefd[0]);
     close(pipefd[1]);
+    result.failed = 1;
+    result.status = 1;
     return result;
   }
   if (child == 0) {
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent ||
+        setpgid(0, 0) != 0)
+      _exit(126);
+    close(pipefd[0]);
     if (dup2(pipefd[1], STDOUT_FILENO) < 0)
       _exit(126);
-    int null_fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
-    if (null_fd >= 0) {
-      (void)dup2(null_fd, STDERR_FILENO);
+    if (pipefd[1] != STDOUT_FILENO)
+      close(pipefd[1]);
+    int null_fd = open("/dev/null", O_RDWR);
+    if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0 ||
+        dup2(null_fd, STDERR_FILENO) < 0)
+      _exit(126);
+    if (null_fd > STDERR_FILENO)
       close(null_fd);
-    }
-    close(pipefd[0]);
-    close(pipefd[1]);
-    (void)setenv("LC_ALL", "C", 1);
-    (void)setenv("LANG", "C", 1);
+    if (setenv("LC_ALL", "C", 1) != 0 || setenv("LANG", "C", 1) != 0)
+      _exit(126);
     if (strchr(argv[0], '/'))
       execv(argv[0], argv);
     else
@@ -261,81 +495,519 @@ static capture_result capture_command(char *const argv[]) {
     _exit(127);
   }
   close(pipefd[1]);
+  (void)setpgid(child, child);
   int flags = fcntl(pipefd[0], F_GETFL);
-  if (flags >= 0)
-    (void)fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+  if (flags < 0 || fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK) != 0) {
+    close(pipefd[0]);
+    result.failed = 1;
+    result.status = 1;
+    audio_terminate_child_group(child, NULL);
+    return result;
+  }
   result.data = malloc(4097U);
   if (!result.data) {
     close(pipefd[0]);
-    kill(child, SIGKILL);
-    (void)waitpid(child, NULL, 0);
+    result.failed = 1;
+    result.status = 1;
+    audio_terminate_child_group(child, NULL);
     return result;
   }
+
   size_t capacity = 4096U;
-  size_t used = 0;
-  int elapsed = 0;
+  size_t used = 0U;
   int eof = 0;
-  while (elapsed < SETTINGS_CAPTURE_TIMEOUT_MS && !eof) {
+  while (!eof && !result.timed_out && !result.too_large && !result.failed) {
+    int64_t now = 0;
+    if (!audio_now_ms(&now)) {
+      result.failed = 1;
+      break;
+    }
+    if (now >= deadline) {
+      result.timed_out = 1;
+      break;
+    }
+    int remaining = (int)(deadline - now);
     struct pollfd descriptor = {pipefd[0], POLLIN | POLLHUP, 0};
-    int ready = poll(&descriptor, 1, 50);
+    int ready = poll(&descriptor, 1, remaining < 50 ? remaining : 50);
     if (ready < 0 && errno == EINTR)
       continue;
-    elapsed += 50;
-    if (ready < 0)
+    if (ready < 0 || (descriptor.revents & (POLLERR | POLLNVAL)) != 0) {
+      result.failed = 1;
       break;
-    if (descriptor.revents & (POLLIN | POLLHUP)) {
-      for (;;) {
-        if (used == capacity) {
-          if (capacity >= SETTINGS_CAPTURE_LIMIT) {
-            errno = E2BIG;
-            eof = 1;
-            break;
-          }
-          size_t next = capacity * 2U;
-          if (next > SETTINGS_CAPTURE_LIMIT)
-            next = SETTINGS_CAPTURE_LIMIT;
-          char *grown = realloc(result.data, next + 1U);
-          if (!grown) {
-            eof = 1;
-            break;
-          }
-          result.data = grown;
-          capacity = next;
-        }
-        ssize_t count = read(pipefd[0], result.data + used, capacity - used);
-        if (count > 0) {
-          used += (size_t)count;
-          continue;
-        }
-        if (count == 0)
-          eof = 1;
-        if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
-            errno != EINTR)
-          eof = 1;
+    }
+    if (ready == 0 || (descriptor.revents & (POLLIN | POLLHUP)) == 0)
+      continue;
+    for (;;) {
+      if (!audio_now_ms(&now)) {
+        result.failed = 1;
         break;
       }
+      if (now >= deadline) {
+        result.timed_out = 1;
+        break;
+      }
+      if (used == capacity) {
+        if (capacity >= SETTINGS_CAPTURE_LIMIT + 1U) {
+          result.too_large = 1;
+          break;
+        }
+        size_t next = capacity * 2U;
+        if (next > SETTINGS_CAPTURE_LIMIT + 1U)
+          next = SETTINGS_CAPTURE_LIMIT + 1U;
+        char *grown = realloc(result.data, next + 1U);
+        if (!grown) {
+          result.failed = 1;
+          break;
+        }
+        result.data = grown;
+        capacity = next;
+      }
+      ssize_t count = read(pipefd[0], result.data + used, capacity - used);
+      if (count > 0) {
+        used += (size_t)count;
+        if (used > SETTINGS_CAPTURE_LIMIT) {
+          result.too_large = 1;
+          break;
+        }
+        continue;
+      }
+      if (count == 0)
+        eof = 1;
+      else if (errno == EINTR)
+        continue;
+      else if (errno != EAGAIN && errno != EWOULDBLOCK)
+        result.failed = 1;
+      break;
     }
   }
   close(pipefd[0]);
+
   int wait_status = 0;
-  pid_t waited = waitpid(child, &wait_status, WNOHANG);
-  while (waited == 0 && elapsed < SETTINGS_CAPTURE_TIMEOUT_MS) {
-    struct timespec delay = {0, 25L * 1000L * 1000L};
-    (void)nanosleep(&delay, NULL);
-    elapsed += 25;
+  pid_t waited = 0;
+  while (!result.timed_out && !result.too_large && !result.failed) {
+    int64_t now = 0;
+    if (!audio_now_ms(&now)) {
+      result.failed = 1;
+      break;
+    }
+    if (now >= deadline) {
+      result.timed_out = 1;
+      break;
+    }
     waited = waitpid(child, &wait_status, WNOHANG);
+    if (waited == child)
+      break;
+    if (waited < 0) {
+      if (errno == EINTR)
+        continue;
+      result.failed = 1;
+      break;
+    }
+    int remaining = (int)(deadline - now);
+    int paused = poll(NULL, 0, remaining < 25 ? remaining : 25);
+    if (paused < 0 && errno != EINTR) {
+      result.failed = 1;
+      break;
+    }
   }
-  if (waited == 0) {
-    result.timed_out = 1;
-    kill(child, SIGKILL);
-    (void)waitpid(child, &wait_status, 0);
-    result.status = 124;
-  } else if (waited < 0 || !WIFEXITED(wait_status))
+
+  if (result.timed_out || result.too_large || result.failed) {
+    audio_terminate_child_group(child, &wait_status);
+    result.status = result.timed_out ? 124 : 1;
+  } else if (waited != child || !WIFEXITED(wait_status)) {
+    result.failed = 1;
     result.status = 1;
-  else
+    (void)kill(-child, SIGKILL);
+  } else {
     result.status = WEXITSTATUS(wait_status);
+    if (result.status != 0)
+      (void)kill(-child, SIGKILL);
+  }
+  if (used > SETTINGS_CAPTURE_LIMIT + 1U) {
+    free(result.data);
+    result.data = NULL;
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  int64_t completed_at = 0;
+  if (!audio_now_ms(&completed_at)) {
+    free(result.data);
+    result.data = NULL;
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  if (completed_at >= deadline) {
+    free(result.data);
+    result.data = NULL;
+    result.timed_out = 1;
+    result.status = 124;
+    return result;
+  }
+  char *completed = realloc(result.data, used + 1U);
+  if (!completed) {
+    free(result.data);
+    result.data = NULL;
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  result.data = completed;
+  if (!audio_now_ms(&completed_at)) {
+    free(result.data);
+    result.data = NULL;
+    result.failed = 1;
+    result.status = 1;
+    return result;
+  }
+  if (completed_at >= deadline) {
+    free(result.data);
+    result.data = NULL;
+    result.timed_out = 1;
+    result.status = 124;
+    return result;
+  }
   result.data[used] = '\0';
+  result.length = used;
   return result;
+}
+
+typedef struct {
+  char *text;
+  size_t length;
+} audio_json_key;
+
+static int audio_json_key_compare(const void *left, const void *right) {
+  const audio_json_key *a = left;
+  const audio_json_key *b = right;
+  size_t common = a->length < b->length ? a->length : b->length;
+  int compared = common > 0U ? memcmp(a->text, b->text, common) : 0;
+  if (compared != 0)
+    return compared;
+  return a->length < b->length ? -1 : a->length > b->length ? 1 : 0;
+}
+
+typedef struct {
+  const char *text;
+  size_t length;
+  size_t offset;
+  size_t key_count;
+} audio_json_scanner;
+
+static void audio_json_skip_whitespace(audio_json_scanner *scanner) {
+  while (scanner->offset < scanner->length &&
+         (scanner->text[scanner->offset] == ' ' ||
+          scanner->text[scanner->offset] == '\t' ||
+          scanner->text[scanner->offset] == '\r' ||
+          scanner->text[scanner->offset] == '\n'))
+    scanner->offset++;
+}
+
+static int audio_json_hex_digit(char byte) {
+  if (byte >= '0' && byte <= '9')
+    return byte - '0';
+  if (byte >= 'a' && byte <= 'f')
+    return byte - 'a' + 10;
+  if (byte >= 'A' && byte <= 'F')
+    return byte - 'A' + 10;
+  return -1;
+}
+
+static int audio_json_code_unit(const char *text, size_t available,
+                                unsigned int *value) {
+  if (!text || available < 4U || !value)
+    return -1;
+  unsigned int decoded = 0U;
+  for (size_t index = 0U; index < 4U; index++) {
+    int digit = audio_json_hex_digit(text[index]);
+    if (digit < 0)
+      return -1;
+    decoded = (decoded << 4U) | (unsigned int)digit;
+  }
+  *value = decoded;
+  return 0;
+}
+
+static int audio_json_scan_string(audio_json_scanner *scanner, size_t *start,
+                                  size_t *length) {
+  if (scanner->offset >= scanner->length ||
+      scanner->text[scanner->offset] != '"')
+    return -1;
+  size_t beginning = scanner->offset++;
+  while (scanner->offset < scanner->length) {
+    unsigned char byte = (unsigned char)scanner->text[scanner->offset++];
+    if (byte == '\\') {
+      if (scanner->offset >= scanner->length)
+        return -1;
+      char escape = scanner->text[scanner->offset++];
+      if (escape == 'u') {
+        unsigned int code_unit = 0U;
+        if (audio_json_code_unit(&scanner->text[scanner->offset],
+                                 scanner->length - scanner->offset,
+                                 &code_unit) != 0 ||
+            code_unit == 0U)
+          return -1;
+        scanner->offset += 4U;
+        if (code_unit >= 0xd800U && code_unit <= 0xdbffU) {
+          if (scanner->length - scanner->offset < 6U ||
+              scanner->text[scanner->offset] != '\\' ||
+              scanner->text[scanner->offset + 1U] != 'u')
+            return -1;
+          unsigned int low_surrogate = 0U;
+          if (audio_json_code_unit(&scanner->text[scanner->offset + 2U], 4U,
+                                   &low_surrogate) != 0 ||
+              low_surrogate < 0xdc00U || low_surrogate > 0xdfffU)
+            return -1;
+          scanner->offset += 6U;
+        } else if (code_unit >= 0xdc00U && code_unit <= 0xdfffU) {
+          return -1;
+        }
+      } else if (!strchr("\"\\/bfnrt", escape)) {
+        return -1;
+      }
+    } else if (byte == '"') {
+      if (start)
+        *start = beginning;
+      if (length)
+        *length = scanner->offset - beginning;
+      return 0;
+    } else if (byte < 0x20U) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+static int audio_json_decode_key(const char *text, size_t length,
+                                 audio_json_key *key) {
+  if (!text || !key || length > INT_MAX)
+    return -1;
+  json_tokener *tokener = json_tokener_new_ex(8);
+  if (!tokener)
+    return -1;
+  json_object *value = json_tokener_parse_ex(tokener, text, (int)length);
+  enum json_tokener_error error = json_tokener_get_error(tokener);
+  size_t parsed = json_tokener_get_parse_end(tokener);
+  if (error != json_tokener_success || parsed != length || !value ||
+      !json_object_is_type(value, json_type_string)) {
+    if (value)
+      json_object_put(value);
+    json_tokener_free(tokener);
+    return -1;
+  }
+  int decoded_length = json_object_get_string_len(value);
+  const char *decoded = json_object_get_string(value);
+  if (decoded_length < 0 || !decoded) {
+    json_object_put(value);
+    json_tokener_free(tokener);
+    return -1;
+  }
+  key->text = malloc((size_t)decoded_length + 1U);
+  if (!key->text) {
+    json_object_put(value);
+    json_tokener_free(tokener);
+    return -1;
+  }
+  memcpy(key->text, decoded, (size_t)decoded_length);
+  key->text[decoded_length] = '\0';
+  key->length = (size_t)decoded_length;
+  json_object_put(value);
+  json_tokener_free(tokener);
+  return 0;
+}
+
+static int audio_json_scan_value(audio_json_scanner *scanner,
+                                 unsigned int depth);
+
+static int audio_json_scan_object(audio_json_scanner *scanner,
+                                  unsigned int depth) {
+  enum {
+    AUDIO_JSON_OBJECT_KEY_LIMIT = 4096,
+    AUDIO_JSON_DOCUMENT_KEY_LIMIT = 16384
+  };
+  if (scanner->offset >= scanner->length ||
+      scanner->text[scanner->offset] != '{')
+    return -1;
+  scanner->offset++;
+  audio_json_key *keys = NULL;
+  size_t key_count = 0U;
+  int result = -1;
+  audio_json_skip_whitespace(scanner);
+  if (scanner->offset < scanner->length &&
+      scanner->text[scanner->offset] == '}') {
+    scanner->offset++;
+    return 0;
+  }
+  for (;;) {
+    if (key_count >= AUDIO_JSON_OBJECT_KEY_LIMIT ||
+        scanner->key_count >= AUDIO_JSON_DOCUMENT_KEY_LIMIT)
+      break;
+    size_t start = 0U;
+    size_t length = 0U;
+    if (audio_json_scan_string(scanner, &start, &length) != 0)
+      break;
+    audio_json_key key = {0};
+    if (audio_json_decode_key(&scanner->text[start], length, &key) != 0)
+      break;
+    audio_json_key *expanded =
+        realloc(keys, (key_count + 1U) * sizeof(*expanded));
+    if (!expanded) {
+      free(key.text);
+      break;
+    }
+    keys = expanded;
+    keys[key_count++] = key;
+    scanner->key_count++;
+    audio_json_skip_whitespace(scanner);
+    if (scanner->offset >= scanner->length ||
+        scanner->text[scanner->offset] != ':')
+      break;
+    scanner->offset++;
+    if (audio_json_scan_value(scanner, depth + 1U) != 0)
+      break;
+    audio_json_skip_whitespace(scanner);
+    if (scanner->offset >= scanner->length)
+      break;
+    char separator = scanner->text[scanner->offset++];
+    if (separator == '}') {
+      result = 0;
+      break;
+    }
+    if (separator != ',')
+      break;
+    audio_json_skip_whitespace(scanner);
+  }
+  if (result == 0 && key_count > 1U) {
+    qsort(keys, key_count, sizeof(keys[0]), audio_json_key_compare);
+    for (size_t index = 1U; index < key_count; index++)
+      if (keys[index - 1U].length == keys[index].length &&
+          memcmp(keys[index - 1U].text, keys[index].text, keys[index].length) ==
+              0) {
+        result = -1;
+        break;
+      }
+  }
+  for (size_t index = 0U; index < key_count; index++)
+    free(keys[index].text);
+  free(keys);
+  return result;
+}
+
+static int audio_json_scan_array(audio_json_scanner *scanner,
+                                 unsigned int depth) {
+  if (scanner->offset >= scanner->length ||
+      scanner->text[scanner->offset] != '[')
+    return -1;
+  scanner->offset++;
+  audio_json_skip_whitespace(scanner);
+  if (scanner->offset < scanner->length &&
+      scanner->text[scanner->offset] == ']') {
+    scanner->offset++;
+    return 0;
+  }
+  for (;;) {
+    if (audio_json_scan_value(scanner, depth + 1U) != 0)
+      return -1;
+    audio_json_skip_whitespace(scanner);
+    if (scanner->offset >= scanner->length)
+      return -1;
+    char separator = scanner->text[scanner->offset++];
+    if (separator == ']')
+      return 0;
+    if (separator != ',')
+      return -1;
+    audio_json_skip_whitespace(scanner);
+  }
+}
+
+static int audio_json_scan_literal(audio_json_scanner *scanner,
+                                   const char *literal) {
+  size_t length = strlen(literal);
+  if (scanner->length - scanner->offset < length ||
+      memcmp(&scanner->text[scanner->offset], literal, length) != 0)
+    return -1;
+  scanner->offset += length;
+  return 0;
+}
+
+static int audio_json_scan_number(audio_json_scanner *scanner) {
+  size_t offset = scanner->offset;
+  if (offset < scanner->length && scanner->text[offset] == '-')
+    offset++;
+  if (offset >= scanner->length)
+    return -1;
+  if (scanner->text[offset] == '0') {
+    offset++;
+    if (offset < scanner->length && scanner->text[offset] >= '0' &&
+        scanner->text[offset] <= '9')
+      return -1;
+  } else if (scanner->text[offset] >= '1' && scanner->text[offset] <= '9') {
+    do {
+      offset++;
+    } while (offset < scanner->length && scanner->text[offset] >= '0' &&
+             scanner->text[offset] <= '9');
+  } else {
+    return -1;
+  }
+  if (offset < scanner->length && scanner->text[offset] == '.') {
+    offset++;
+    size_t fractional = offset;
+    while (offset < scanner->length && scanner->text[offset] >= '0' &&
+           scanner->text[offset] <= '9')
+      offset++;
+    if (offset == fractional)
+      return -1;
+  }
+  if (offset < scanner->length &&
+      (scanner->text[offset] == 'e' || scanner->text[offset] == 'E')) {
+    offset++;
+    if (offset < scanner->length &&
+        (scanner->text[offset] == '+' || scanner->text[offset] == '-'))
+      offset++;
+    size_t exponent = offset;
+    while (offset < scanner->length && scanner->text[offset] >= '0' &&
+           scanner->text[offset] <= '9')
+      offset++;
+    if (offset == exponent)
+      return -1;
+  }
+  scanner->offset = offset;
+  return 0;
+}
+
+static int audio_json_scan_value(audio_json_scanner *scanner,
+                                 unsigned int depth) {
+  if (!scanner || depth > 64U)
+    return -1;
+  audio_json_skip_whitespace(scanner);
+  if (scanner->offset >= scanner->length)
+    return -1;
+  char first = scanner->text[scanner->offset];
+  if (first == '{')
+    return audio_json_scan_object(scanner, depth);
+  if (first == '[')
+    return audio_json_scan_array(scanner, depth);
+  if (first == '"')
+    return audio_json_scan_string(scanner, NULL, NULL);
+  if (first == 't')
+    return audio_json_scan_literal(scanner, "true");
+  if (first == 'f')
+    return audio_json_scan_literal(scanner, "false");
+  if (first == 'n')
+    return audio_json_scan_literal(scanner, "null");
+  if (first == '-' || (first >= '0' && first <= '9'))
+    return audio_json_scan_number(scanner);
+  return -1;
+}
+
+static int audio_json_is_strict_and_unique(const char *text, size_t length) {
+  audio_json_scanner scanner = {
+      .text = text, .length = length, .offset = 0U, .key_count = 0U};
+  if (audio_json_scan_value(&scanner, 0U) != 0)
+    return 0;
+  audio_json_skip_whitespace(&scanner);
+  return scanner.offset == scanner.length;
 }
 
 static json_object *pactl_json(const char *pactl, const char *first,
@@ -354,23 +1026,35 @@ static json_object *pactl_json(const char *pactl, const char *first,
     argv[write++] = (char *)third;
   argv[write] = NULL;
   capture_result result = capture_command(argv);
-  if (!result.data || result.status != 0) {
-    *reason = result.timed_out ? "timeout" : "unavailable";
+  if (!result.data || result.too_large || result.status != 0) {
+    *reason = result.too_large   ? "invalid-response"
+              : result.timed_out ? "timeout"
+                                 : "unavailable";
     capture_free(&result);
     return NULL;
   }
-  json_tokener *tokener = json_tokener_new_ex(32);
+  if (result.length > INT_MAX ||
+      memchr(result.data, '\0', result.length) != NULL ||
+      !audio_utf8_valid((const unsigned char *)result.data, result.length) ||
+      !audio_json_is_strict_and_unique(result.data, result.length)) {
+    capture_free(&result);
+    *reason = "invalid-response";
+    return NULL;
+  }
+  size_t response_length = result.length;
+  json_tokener *tokener = json_tokener_new_ex(65);
   if (!tokener) {
     capture_free(&result);
     *reason = "invalid-response";
     return NULL;
   }
   json_object *value =
-      json_tokener_parse_ex(tokener, result.data, (int)strlen(result.data));
+      json_tokener_parse_ex(tokener, result.data, (int)response_length);
   enum json_tokener_error error = json_tokener_get_error(tokener);
+  size_t parsed = json_tokener_get_parse_end(tokener);
   json_tokener_free(tokener);
   capture_free(&result);
-  if (error != json_tokener_success || !value) {
+  if (error != json_tokener_success || parsed != response_length || !value) {
     if (value)
       json_object_put(value);
     *reason = "invalid-response";
@@ -400,6 +1084,17 @@ static uint64_t audio_fnv1a64(const char *text) {
   return hash;
 }
 
+static int audio_profile_token_for_raw(const char *card_raw,
+                                       const char *profile_raw, char *token,
+                                       size_t token_size) {
+  uint64_t hash = UINT64_C(14695981039346656037);
+  audio_fnv1a64_field(&hash, "synapse.settings.audio-profile-token/v1");
+  audio_fnv1a64_field(&hash, card_raw);
+  audio_fnv1a64_field(&hash, profile_raw);
+  int written = snprintf(token, token_size, "profile-%016" PRIx64, hash);
+  return written < 0 || (size_t)written >= token_size ? -1 : 0;
+}
+
 static int endpoint_compare(const void *left, const void *right) {
   const audio_endpoint *a = left;
   const audio_endpoint *b = right;
@@ -412,34 +1107,45 @@ static int parse_endpoints(json_object *array, audio_endpoint *items,
   if (!json_object_is_type(array, json_type_array))
     return -1;
   size_t length = json_object_array_length(array);
+  if (length > AUDIO_ENDPOINT_LIMIT || *count > AUDIO_ENDPOINT_LIMIT - length)
+    return -1;
+  int seen_indexes[AUDIO_ENDPOINT_LIMIT];
+  size_t seen_index_count = 0U;
   for (size_t i = 0; i < length; i++) {
     json_object *value = json_object_array_get_idx(array, i);
     if (!json_object_is_type(value, json_type_object))
       return -1;
-    json_object *monitor = NULL;
-    json_object *monitor_source = NULL;
-    int monitor_of_sink =
-        json_object_object_get_ex(value, "monitor_of_sink", &monitor) &&
-        monitor && !json_object_is_type(monitor, json_type_null);
-    int named_monitor =
-        json_object_object_get_ex(value, "monitor_source", &monitor_source) &&
-        json_object_is_type(monitor_source, json_type_string) &&
-        json_object_get_string_len(monitor_source) > 0;
-    if (skip_monitors && (monitor_of_sink || named_monitor))
-      continue;
-    if (*count >= AUDIO_ENDPOINT_LIMIT)
+    int valid = 0;
+    int endpoint_index = 0;
+    const char *name = audio_json_bounded_string(
+        value, "name", 0, AUDIO_RAW_IDENTITY_LIMIT, &valid);
+    if (!valid || !audio_raw_identity_valid(name) ||
+        audio_json_index(value, "index", &endpoint_index) != 0)
       return -1;
+    for (size_t previous = 0; previous < seen_index_count; previous++)
+      if (seen_indexes[previous] == endpoint_index)
+        return -1;
+    seen_indexes[seen_index_count++] = endpoint_index;
+    int is_monitor = 0;
+    int volume = 0;
+    int muted = 0;
+    const char *description = audio_json_optional_bounded_string(
+        value, "description", AUDIO_LABEL_LIMIT, &valid);
+    if (!valid || audio_source_is_monitor(value, &is_monitor) != 0 ||
+        audio_volume_percent(value, &volume) != 0 ||
+        audio_optional_bool(value, "mute", 0, &muted) != 0)
+      return -1;
+    if (skip_monitors && is_monitor)
+      continue;
     audio_endpoint *item = &items[(*count)++];
     memset(item, 0, sizeof(*item));
-    const char *name = json_string_value(value, "name", NULL);
-    const char *description = json_string_value(value, "description", prefix);
-    if (!name ||
-        copy_bounded(item->raw_name, sizeof(item->raw_name), name) != 0 ||
-        copy_label(item->label, sizeof(item->label), description) != 0)
+    if (copy_bounded(item->raw_name, sizeof(item->raw_name), name) != 0 ||
+        copy_label(item->label, sizeof(item->label),
+                   description ? description : "") != 0)
       return -1;
-    item->index = json_int_value(value, "index", -1);
-    item->volume_percent = volume_percent(value);
-    item->muted = json_bool_value(value, "mute", 0);
+    item->index = endpoint_index;
+    item->volume_percent = volume;
+    item->muted = muted;
     item->is_default = default_name && strcmp(default_name, name) == 0;
   }
   qsort(items, *count, sizeof(*items), endpoint_compare);
@@ -451,7 +1157,8 @@ static int parse_endpoints(json_object *array, audio_endpoint *items,
     if (written < 0 || (size_t)written >= sizeof(items[i].id))
       return -1;
     for (size_t j = 0; j < i; j++)
-      if (strcmp(items[j].id, items[i].id) == 0)
+      if (strcmp(items[j].id, items[i].id) == 0 ||
+          items[j].index == items[i].index)
         return -1;
   }
   return 0;
@@ -468,25 +1175,25 @@ static const char *endpoint_id_for_index(const audio_endpoint *items,
 static pid_t stream_process_pid(json_object *properties) {
   json_object *value = NULL;
   if (!properties ||
-      !json_object_object_get_ex(properties, "application.process.id", &value))
+      !json_object_object_get_ex(properties, "application.process.id",
+                                 &value) ||
+      !json_object_is_type(value, json_type_string))
     return 0;
-  int64_t parsed = 0;
-  if (json_object_is_type(value, json_type_int)) {
-    parsed = json_object_get_int64(value);
-  } else if (json_object_is_type(value, json_type_string)) {
-    const char *text = json_object_get_string(value);
-    if (!text || !*text)
-      return 0;
-    errno = 0;
-    char *end = NULL;
-    long long number = strtoll(text, &end, 10);
-    if (errno != 0 || !end || *end)
-      return 0;
-    parsed = number;
-  } else {
+  const char *text = json_object_get_string(value);
+  int length = json_object_get_string_len(value);
+  if (!text || length <= 0 || length > 10 || text[0] < '1' || text[0] > '9')
     return 0;
+  int parsed = 0;
+  for (int index = 0; index < length; index++) {
+    unsigned char byte = (unsigned char)text[index];
+    if (byte < '0' || byte > '9')
+      return 0;
+    int digit = byte - '0';
+    if (parsed > (INT_MAX - digit) / 10)
+      return 0;
+    parsed = parsed * 10 + digit;
   }
-  return parsed > 0 && parsed <= INT_MAX ? (pid_t)parsed : 0;
+  return (pid_t)parsed;
 }
 
 static int process_rule_available(pid_t process_pid) {
@@ -528,8 +1235,8 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
     audio_stream *stream = &inventory->streams[inventory->stream_count++];
     memset(stream, 0, sizeof(*stream));
     stream->direction = direction;
-    int index = json_int_value(value, "index", -1);
-    if (index < 0)
+    int index = 0;
+    if (audio_json_index(value, "index", &index) != 0)
       return -1;
     stream->backend_index = index;
     int written = snprintf(
@@ -539,19 +1246,32 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
       return -1;
     json_object *properties = NULL;
     const char *label = "Application";
-    if (json_object_object_get_ex(value, "properties", &properties) &&
-        json_object_is_type(properties, json_type_object)) {
-      label =
-          json_string_value(properties, "application.name",
-                            json_string_value(properties, "media.name", label));
+    if (json_object_object_get_ex(value, "properties", &properties)) {
+      if (!json_object_is_type(properties, json_type_object))
+        return -1;
+      int valid = 0;
+      const char *application_name = audio_json_optional_bounded_string(
+          properties, "application.name", AUDIO_LABEL_LIMIT, &valid);
+      if (!valid)
+        return -1;
+      const char *media_name = audio_json_optional_bounded_string(
+          properties, "media.name", AUDIO_LABEL_LIMIT, &valid);
+      if (!valid)
+        return -1;
+      label = application_name ? application_name
+              : media_name     ? media_name
+                               : label;
       stream->process_pid = stream_process_pid(properties);
       stream->process_rule_available =
           process_rule_available(stream->process_pid);
     }
     if (copy_label(stream->label, sizeof(stream->label), label) != 0)
       return -1;
-    int target_index = json_int_value(
-        value, strcmp(direction, "playback") == 0 ? "sink" : "source", -1);
+    int target_index = 0;
+    if (audio_json_index(value,
+                         strcmp(direction, "playback") == 0 ? "sink" : "source",
+                         &target_index) != 0)
+      return -1;
     stream->target_index = target_index;
     const char *target =
         strcmp(direction, "playback") == 0
@@ -562,8 +1282,9 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
     if (copy_bounded(stream->target, sizeof(stream->target),
                      target ? target : "unavailable") != 0)
       return -1;
-    stream->volume_percent = volume_percent(value);
-    stream->muted = json_bool_value(value, "mute", 0);
+    if (audio_volume_percent(value, &stream->volume_percent) != 0 ||
+        audio_optional_bool(value, "mute", 0, &stream->muted) != 0)
+      return -1;
   }
   return 0;
 }
@@ -601,15 +1322,23 @@ static int parse_cards(json_object *array, audio_inventory *inventory) {
       return -1;
     audio_card *card = &inventory->cards[inventory->card_count++];
     memset(card, 0, sizeof(*card));
-    const char *name = json_string_value(value, "name", NULL);
-    const char *label = json_string_value(value, "description", "Audio card");
-    const char *profile =
-        json_string_value(value, "active_profile", "unavailable");
-    if (!name ||
+    int valid = 0;
+    const char *name = audio_json_bounded_string(
+        value, "name", 0, AUDIO_RAW_IDENTITY_LIMIT, &valid);
+    if (!valid || !audio_raw_identity_valid(name))
+      return -1;
+    const char *label = audio_json_optional_bounded_string(
+        value, "description", AUDIO_LABEL_LIMIT, &valid);
+    if (!valid)
+      return -1;
+    const char *profile = audio_json_bounded_string(
+        value, "active_profile", 1, AUDIO_RAW_IDENTITY_LIMIT, &valid);
+    if (!valid || (profile && *profile && !audio_raw_identity_valid(profile)) ||
         copy_bounded(card->raw_name, sizeof(card->raw_name), name) != 0 ||
-        copy_label(card->label, sizeof(card->label), label) != 0 ||
-        copy_label(card->active_profile, sizeof(card->active_profile),
-                   profile) != 0)
+        copy_label(card->label, sizeof(card->label), label ? label : "") != 0 ||
+        copy_bounded(card->active_profile, sizeof(card->active_profile),
+                     profile ? profile : "") != 0 ||
+        audio_json_index(value, "index", &card->index) != 0)
       return -1;
   }
   qsort(inventory->cards, inventory->card_count, sizeof(inventory->cards[0]),
@@ -621,10 +1350,19 @@ static int parse_cards(json_object *array, audio_inventory *inventory) {
     int written = snprintf(inventory->cards[i].id,
                            sizeof(inventory->cards[i].id), "card-%016" PRIx64,
                            audio_fnv1a64(inventory->cards[i].raw_name));
-    if (written < 0 || (size_t)written >= sizeof(inventory->cards[i].id))
+    if (written < 0 || (size_t)written >= sizeof(inventory->cards[i].id) ||
+        (inventory->cards[i].active_profile[0] != '\0' &&
+         audio_profile_token_for_raw(
+             inventory->cards[i].raw_name, inventory->cards[i].active_profile,
+             inventory->cards[i].active_profile_token,
+             sizeof(inventory->cards[i].active_profile_token)) != 0))
       return -1;
     for (size_t j = 0; j < i; j++)
-      if (strcmp(inventory->cards[j].id, inventory->cards[i].id) == 0)
+      if (strcmp(inventory->cards[j].id, inventory->cards[i].id) == 0 ||
+          inventory->cards[j].index == inventory->cards[i].index ||
+          (inventory->cards[i].active_profile_token[0] != '\0' &&
+           strcmp(inventory->cards[j].active_profile_token,
+                  inventory->cards[i].active_profile_token) == 0))
         return -1;
   }
   return 0;
@@ -663,10 +1401,21 @@ static int load_audio_inventory(audio_inventory *inventory) {
     reason = "invalid-response";
     goto done;
   }
-  const char *default_output =
-      json_string_value(info, "default_sink_name", NULL);
-  const char *default_input =
-      json_string_value(info, "default_source_name", NULL);
+  int valid = 0;
+  const char *default_output = audio_json_optional_bounded_string(
+      info, "default_sink_name", AUDIO_RAW_IDENTITY_LIMIT, &valid);
+  if (!valid || (default_output && *default_output &&
+                 !audio_raw_identity_valid(default_output))) {
+    reason = "invalid-response";
+    goto done;
+  }
+  const char *default_input = audio_json_optional_bounded_string(
+      info, "default_source_name", AUDIO_RAW_IDENTITY_LIMIT, &valid);
+  if (!valid || (default_input && *default_input &&
+                 !audio_raw_identity_valid(default_input))) {
+    reason = "invalid-response";
+    goto done;
+  }
   if (parse_endpoints(sinks, inventory->outputs, &inventory->output_count,
                       default_output, "output", 0) != 0 ||
       parse_endpoints(sources, inventory->inputs, &inventory->input_count,
@@ -684,8 +1433,10 @@ static int load_audio_inventory(audio_inventory *inventory) {
   inventory->available = 1;
   inventory->reason = "";
 done:
-  if (!inventory->available)
+  if (!inventory->available) {
+    memset(inventory, 0, sizeof(*inventory));
     inventory->reason = reason;
+  }
   if (info)
     json_object_put(info);
   if (sinks)
@@ -719,7 +1470,7 @@ static void print_audio_inventory_json(const audio_inventory *inventory) {
   json_object *root = json_object_new_object();
   json_object_object_add(
       root, "schema",
-      json_object_new_string("synapse.settings.audio-inventory/v1"));
+      json_object_new_string("synapse.settings.audio-inventory/v2"));
   json_object_object_add(root, "stateAuthority",
                          json_object_new_string("pipewire-pulse-model"));
   json_object_object_add(root, "available",
@@ -771,7 +1522,7 @@ static void print_audio_inventory_json(const audio_inventory *inventory) {
                            json_object_new_string(inventory->cards[i].label));
     json_object_object_add(
         value, "activeProfile",
-        json_object_new_string(inventory->cards[i].active_profile));
+        json_object_new_string(inventory->cards[i].active_profile_token));
     json_object_array_add(cards, value);
   }
   json_object_object_add(root, "cards", cards);
@@ -1293,7 +2044,7 @@ static int execute_broker_move(const audio_broker_stream_state *state,
                    index, (char *)raw_target, NULL};
   capture_result result = capture_command(argv);
   *timed_out = result.timed_out;
-  int status = result.data && result.status == 0 ? 0 : -1;
+  int status = result.data && !result.too_large && result.status == 0 ? 0 : -1;
   capture_free(&result);
   return status;
 }
@@ -1853,6 +2604,9 @@ static int settings_audio_stream_move_command(int argc, char **argv) {
              : 1;
 }
 
+#ifdef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
+#include "audio_profile_port.inc"
+#endif
 #include "audio_control.inc"
 
 static int execute_default(const char *direction,
@@ -1863,7 +2617,7 @@ static int execute_default(const char *direction,
                                                     : "set-default-source",
                    (char *)endpoint->raw_name, NULL};
   capture_result result = capture_command(argv);
-  int status = result.data && result.status == 0 ? 0 : -1;
+  int status = result.data && !result.too_large && result.status == 0 ? 0 : -1;
   capture_free(&result);
   return status;
 }
@@ -1885,6 +2639,14 @@ int settings_audio_command(int argc, char **argv) {
   if (strcmp(argv[1], "plan-stream-move") == 0 ||
       strcmp(argv[1], "move-stream") == 0)
     return settings_audio_stream_move_command(argc, argv);
+#ifdef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
+  if (strcmp(argv[1], "profile-port-inventory") == 0)
+    return settings_audio_profile_port_inventory_command(argc, argv);
+  if (strcmp(argv[1], "plan-profile") == 0 ||
+      strcmp(argv[1], "set-profile") == 0 ||
+      strcmp(argv[1], "plan-port") == 0 || strcmp(argv[1], "set-port") == 0)
+    return settings_audio_selection_command(argc, argv);
+#endif
   if (strcmp(argv[1], "plan-volume") == 0 ||
       strcmp(argv[1], "set-volume") == 0 || strcmp(argv[1], "plan-mute") == 0 ||
       strcmp(argv[1], "set-mute") == 0)
