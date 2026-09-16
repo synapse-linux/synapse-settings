@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schema/settings/audio-goxlr-status-v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "reason", "providerActive", "presenceKnown", "devicePresent", "deviceCount", "devices", "stateAuthority", "hardwareReadback", "hardwareExactRollback", "mutationAvailable", "inspectionReadOnly", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-goxlr-status/v2"},
+    "status": {"enum": ["Ready", "Inactive", "Unavailable", "Failed"]},
+    "reason": {"type": ["string", "null"], "enum": [null, "adapter-unavailable", "provider-inactive", "timeout", "response-too-large", "invalid-response", "status-unavailable"]},
+    "providerActive": {"type": "boolean"},
+    "presenceKnown": {"type": "boolean"},
+    "devicePresent": {"type": "boolean"},
+    "deviceCount": {"type": "integer", "minimum": 0, "maximum": 1},
+    "devices": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/device"}},
+    "stateAuthority": {"const": "provider-profile-model"},
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "mutationAvailable": {"type": "boolean"},
+    "inspectionReadOnly": {"const": true},
+    "bounded": {"const": true}
+  },
+  "$defs": {
+    "fader": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fader", "channel", "volume", "muted", "volumeAvailable", "muteAvailable"],
+      "properties": {
+        "fader": {"enum": ["A", "B", "C", "D"]},
+        "channel": {"enum": ["Mic", "LineIn", "Console", "System", "Game", "Chat", "Sample", "Music", "Headphones", "MicMonitor", "LineOut"]},
+        "volume": {"type": "integer", "minimum": 0, "maximum": 255},
+        "muted": {"type": "boolean"},
+        "volumeAvailable": {"type": "boolean"},
+        "muteAvailable": {"type": "boolean"}
+      }
+    },
+    "device": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model", "profileModelReady", "systemOutputSupported", "controlAvailable", "faders", "cough", "outputs"],
+      "properties": {
+        "model": {"enum": ["GoXLR Mini", "GoXLR"]},
+        "profileModelReady": {"type": "boolean"},
+        "systemOutputSupported": {"type": "boolean"},
+        "controlAvailable": {"type": "boolean"},
+        "faders": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/fader"}},
+        "cough": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "muted", "available"],
+          "properties": {"mode": {"enum": ["Toggle", "Hold"]}, "muted": {"type": "boolean"}, "available": {"type": "boolean"}}
+        },
+        "outputs": {
+          "type": "object", "additionalProperties": false,
+          "required": ["headphonesVolume", "lineOutVolume", "monitoredOutput", "headphonesAvailable", "lineOutAvailable"],
+          "properties": {
+            "headphonesVolume": {"type": "integer", "minimum": 0, "maximum": 255},
+            "lineOutVolume": {"type": "integer", "minimum": 0, "maximum": 255},
+            "monitoredOutput": {"enum": ["Headphones", "BroadcastMix", "ChatMic", "Sampler", "LineOut", "StreamMix2"]},
+            "headphonesAvailable": {"type": "boolean"},
+            "lineOutAvailable": {"type": "boolean"}
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"providerActive": {"const": false}}}, "then": {"properties": {"deviceCount": {"const": 0}, "devices": {"maxItems": 0}, "mutationAvailable": {"const": false}}}},
+    {"if": {"properties": {"presenceKnown": {"const": false}}}, "then": {"properties": {"devicePresent": {"const": false}}}},
+    {"if": {"properties": {"status": {"const": "Ready"}}}, "then": {"properties": {"reason": {"const": null}, "providerActive": {"const": true}, "presenceKnown": {"const": true}}}},
+    {"if": {"properties": {"status": {"const": "Inactive"}}}, "then": {"properties": {"reason": {"const": "provider-inactive"}, "providerActive": {"const": false}}}},
+    {"if": {"properties": {"status": {"const": "Unavailable"}}}, "then": {"properties": {"reason": {"const": "adapter-unavailable"}, "providerActive": {"const": false}}}},
+    {"if": {"properties": {"status": {"const": "Failed"}}}, "then": {"properties": {"reason": {"enum": ["timeout", "response-too-large", "invalid-response", "status-unavailable"]}, "providerActive": {"const": false}}}},
+    {"oneOf": [
+      {"properties": {"deviceCount": {"const": 0}, "devices": {"maxItems": 0}}},
+      {"properties": {"deviceCount": {"const": 1}, "devices": {"minItems": 1, "maxItems": 1}}}
+    ]}
+  ]
+}

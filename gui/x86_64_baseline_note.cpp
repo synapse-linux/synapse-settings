@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 
 #if defined(__x86_64__)
 // Shared objects do not receive the executable startup note. Publish explicit

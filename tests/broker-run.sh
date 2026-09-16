@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 settings=${1:?settings test binary required}
@@ -144,7 +144,7 @@ PY
   --ack synapse-settings/audio-route-policy/v1 --format json >"$work/rule-directory.json"
 
 "${BASE_ENV[@]}" "$broker" --probe --format json >"$work/probe.json"
-[[ $("$broker" --version) == 'synapse-audio-route-broker 1.0.0-alpha.1' ]]
+[[ $("$broker" --version) == 'synapse-audio-route-broker 1.1.0-alpha.1' ]]
 python3 - "$work/probe.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]));assert v['schema']=='synapse.settings.audio-route-broker-status/v1'

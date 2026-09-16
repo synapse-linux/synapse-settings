@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 
-#include "settings_internal.h"
+#include "audio_private.h"
 
 #include <json-c/json.h>
 
@@ -27,15 +27,10 @@
 #define O_PATH 010000000
 #endif
 
-#define AUDIO_ENDPOINT_LIMIT 64U
 #define AUDIO_STREAM_LIMIT 128U
-#define AUDIO_CARD_LIMIT 32U
-#define AUDIO_LABEL_LIMIT 255U
 #define AUDIO_RAW_IDENTITY_LIMIT 255U
 #define AUDIO_ACK "synapse-settings/audio-default/v1"
 #define AUDIO_STREAM_MOVE_ACK "synapse-settings/audio-existing-stream-move/v1"
-#define AUDIO_CONTROL_ACK "synapse-settings/audio-control/v1"
-#define AUDIO_SAFE_VOLUME_MAXIMUM 100
 
 #ifdef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
 #define AUDIO_PROFILE_PORT_USAGE                                               \
@@ -101,16 +96,7 @@ typedef struct {
   size_t card_count;
 } audio_inventory;
 
-typedef struct {
-  char *data;
-  size_t length;
-  int status;
-  int timed_out;
-  int too_large;
-  int failed;
-} capture_result;
-
-static const char *pactl_binary(void) {
+const char *audio_pactl_binary(void) {
 #ifdef SYNAPSE_SETTINGS_TEST_HOOKS
   const char *override = getenv("SYNAPSE_PACTL");
   if (override && *override) {
@@ -125,7 +111,7 @@ static const char *pactl_binary(void) {
   return "/usr/bin/pactl";
 }
 
-static void audio_usage(FILE *out) {
+void audio_usage(FILE *out) {
   fputs("Usage:\n"
         "  synapse-settings audio inventory [--format text|json]\n"
         "  synapse-settings audio broker-status [--format text|json]\n",
@@ -168,7 +154,7 @@ static void audio_usage(FILE *out) {
         out);
 }
 
-static int copy_bounded(char *target, size_t size, const char *value) {
+int audio_copy_bounded(char *target, size_t size, const char *value) {
   if (!value)
     value = "";
   size_t length = strlen(value);
@@ -220,7 +206,7 @@ static int audio_utf8_valid(const unsigned char *bytes, size_t length) {
   return 1;
 }
 
-static int audio_raw_identity_valid(const char *value) {
+int audio_raw_identity_valid(const char *value) {
   if (!value || !*value)
     return 0;
   size_t length = strlen(value);
@@ -228,9 +214,9 @@ static int audio_raw_identity_valid(const char *value) {
          audio_utf8_valid((const unsigned char *)value, length);
 }
 
-static const char *audio_json_bounded_string(json_object *object,
-                                             const char *key, int allow_missing,
-                                             size_t maximum, int *valid) {
+const char *audio_json_bounded_string(json_object *object, const char *key,
+                                      int allow_missing, size_t maximum,
+                                      int *valid) {
   json_object *value = NULL;
   *valid = 0;
   if (!object || !json_object_object_get_ex(object, key, &value)) {
@@ -256,10 +242,9 @@ static const char *audio_json_bounded_string(json_object *object,
   return text;
 }
 
-static const char *audio_json_optional_bounded_string(json_object *object,
-                                                      const char *key,
-                                                      size_t maximum,
-                                                      int *valid) {
+const char *audio_json_optional_bounded_string(json_object *object,
+                                               const char *key, size_t maximum,
+                                               int *valid) {
   json_object *value = NULL;
   if (!valid)
     return NULL;
@@ -273,7 +258,7 @@ static const char *audio_json_optional_bounded_string(json_object *object,
   return audio_json_bounded_string(object, key, 0, maximum, valid);
 }
 
-static int audio_json_index(json_object *object, const char *key, int *index) {
+int audio_json_index(json_object *object, const char *key, int *index) {
   json_object *value = NULL;
   if (!object || !key || !index ||
       !json_object_object_get_ex(object, key, &value) ||
@@ -286,7 +271,7 @@ static int audio_json_index(json_object *object, const char *key, int *index) {
   return 0;
 }
 
-static int audio_source_is_monitor(json_object *object, int *is_monitor) {
+int audio_source_is_monitor(json_object *object, int *is_monitor) {
   if (!object || !is_monitor)
     return -1;
   *is_monitor = 0;
@@ -312,7 +297,7 @@ static int audio_source_is_monitor(json_object *object, int *is_monitor) {
   return 0;
 }
 
-static int copy_label(char *target, size_t size, const char *value) {
+int audio_copy_label(char *target, size_t size, const char *value) {
   if (!value)
     value = "";
   size_t written = 0;
@@ -382,7 +367,7 @@ static int audio_volume_percent(json_object *object, int *percent) {
   return 0;
 }
 
-static void capture_free(capture_result *result) {
+void audio_capture_free(audio_capture_result *result) {
   free(result->data);
   memset(result, 0, sizeof(*result));
 }
@@ -435,8 +420,8 @@ static void audio_terminate_child_group(pid_t child, int *wait_status) {
   }
 }
 
-static capture_result capture_command(char *const argv[]) {
-  capture_result result = {0};
+audio_capture_result audio_capture_command(char *const argv[]) {
+  audio_capture_result result = {0};
   int64_t started = 0;
   if (!audio_now_ms(&started)) {
     result.failed = 1;
@@ -620,8 +605,8 @@ static capture_result capture_command(char *const argv[]) {
     (void)kill(-child, SIGKILL);
   } else {
     result.status = WEXITSTATUS(wait_status);
-    if (result.status != 0)
-      (void)kill(-child, SIGKILL);
+    // The finite command owns its whole group, including after leader success.
+    (void)kill(-child, SIGKILL);
   }
   if (used > SETTINGS_CAPTURE_LIMIT + 1U) {
     free(result.data);
@@ -1010,9 +995,9 @@ static int audio_json_is_strict_and_unique(const char *text, size_t length) {
   return scanner.offset == scanner.length;
 }
 
-static json_object *pactl_json(const char *pactl, const char *first,
-                               const char *second, const char *third,
-                               const char **reason) {
+json_object *audio_pactl_json(const char *pactl, const char *first,
+                              const char *second, const char *third,
+                              const char **reason) {
   char *argv[7] = {(char *)pactl, "--format=json",
                    (char *)first, (char *)second,
                    (char *)third, NULL,
@@ -1025,26 +1010,26 @@ static json_object *pactl_json(const char *pactl, const char *first,
   if (third)
     argv[write++] = (char *)third;
   argv[write] = NULL;
-  capture_result result = capture_command(argv);
+  audio_capture_result result = audio_capture_command(argv);
   if (!result.data || result.too_large || result.status != 0) {
     *reason = result.too_large   ? "invalid-response"
               : result.timed_out ? "timeout"
                                  : "unavailable";
-    capture_free(&result);
+    audio_capture_free(&result);
     return NULL;
   }
   if (result.length > INT_MAX ||
       memchr(result.data, '\0', result.length) != NULL ||
       !audio_utf8_valid((const unsigned char *)result.data, result.length) ||
       !audio_json_is_strict_and_unique(result.data, result.length)) {
-    capture_free(&result);
+    audio_capture_free(&result);
     *reason = "invalid-response";
     return NULL;
   }
   size_t response_length = result.length;
   json_tokener *tokener = json_tokener_new_ex(65);
   if (!tokener) {
-    capture_free(&result);
+    audio_capture_free(&result);
     *reason = "invalid-response";
     return NULL;
   }
@@ -1053,7 +1038,7 @@ static json_object *pactl_json(const char *pactl, const char *first,
   enum json_tokener_error error = json_tokener_get_error(tokener);
   size_t parsed = json_tokener_get_parse_end(tokener);
   json_tokener_free(tokener);
-  capture_free(&result);
+  audio_capture_free(&result);
   if (error != json_tokener_success || parsed != response_length || !value) {
     if (value)
       json_object_put(value);
@@ -1072,21 +1057,20 @@ static void audio_fnv1a64_update(uint64_t *hash, const void *data,
   }
 }
 
-static void audio_fnv1a64_field(uint64_t *hash, const char *text) {
+void audio_fnv1a64_field(uint64_t *hash, const char *text) {
   static const unsigned char separator = 0;
   audio_fnv1a64_update(hash, text, strlen(text));
   audio_fnv1a64_update(hash, &separator, sizeof(separator));
 }
 
-static uint64_t audio_fnv1a64(const char *text) {
+uint64_t audio_fnv1a64(const char *text) {
   uint64_t hash = UINT64_C(14695981039346656037);
   audio_fnv1a64_update(&hash, text, strlen(text));
   return hash;
 }
 
-static int audio_profile_token_for_raw(const char *card_raw,
-                                       const char *profile_raw, char *token,
-                                       size_t token_size) {
+int audio_profile_token_for_raw(const char *card_raw, const char *profile_raw,
+                                char *token, size_t token_size) {
   uint64_t hash = UINT64_C(14695981039346656037);
   audio_fnv1a64_field(&hash, "synapse.settings.audio-profile-token/v1");
   audio_fnv1a64_field(&hash, card_raw);
@@ -1139,9 +1123,9 @@ static int parse_endpoints(json_object *array, audio_endpoint *items,
       continue;
     audio_endpoint *item = &items[(*count)++];
     memset(item, 0, sizeof(*item));
-    if (copy_bounded(item->raw_name, sizeof(item->raw_name), name) != 0 ||
-        copy_label(item->label, sizeof(item->label),
-                   description ? description : "") != 0)
+    if (audio_copy_bounded(item->raw_name, sizeof(item->raw_name), name) != 0 ||
+        audio_copy_label(item->label, sizeof(item->label),
+                         description ? description : "") != 0)
       return -1;
     item->index = endpoint_index;
     item->volume_percent = volume;
@@ -1265,7 +1249,7 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
       stream->process_rule_available =
           process_rule_available(stream->process_pid);
     }
-    if (copy_label(stream->label, sizeof(stream->label), label) != 0)
+    if (audio_copy_label(stream->label, sizeof(stream->label), label) != 0)
       return -1;
     int target_index = 0;
     if (audio_json_index(value,
@@ -1279,8 +1263,8 @@ static int parse_stream_array(json_object *array, audio_inventory *inventory,
                                     target_index)
             : endpoint_id_for_index(inventory->inputs, inventory->input_count,
                                     target_index);
-    if (copy_bounded(stream->target, sizeof(stream->target),
-                     target ? target : "unavailable") != 0)
+    if (audio_copy_bounded(stream->target, sizeof(stream->target),
+                           target ? target : "unavailable") != 0)
       return -1;
     if (audio_volume_percent(value, &stream->volume_percent) != 0 ||
         audio_optional_bool(value, "mute", 0, &stream->muted) != 0)
@@ -1334,10 +1318,11 @@ static int parse_cards(json_object *array, audio_inventory *inventory) {
     const char *profile = audio_json_bounded_string(
         value, "active_profile", 1, AUDIO_RAW_IDENTITY_LIMIT, &valid);
     if (!valid || (profile && *profile && !audio_raw_identity_valid(profile)) ||
-        copy_bounded(card->raw_name, sizeof(card->raw_name), name) != 0 ||
-        copy_label(card->label, sizeof(card->label), label ? label : "") != 0 ||
-        copy_bounded(card->active_profile, sizeof(card->active_profile),
-                     profile ? profile : "") != 0 ||
+        audio_copy_bounded(card->raw_name, sizeof(card->raw_name), name) != 0 ||
+        audio_copy_label(card->label, sizeof(card->label),
+                         label ? label : "") != 0 ||
+        audio_copy_bounded(card->active_profile, sizeof(card->active_profile),
+                           profile ? profile : "") != 0 ||
         audio_json_index(value, "index", &card->index) != 0)
       return -1;
   }
@@ -1371,7 +1356,7 @@ static int parse_cards(json_object *array, audio_inventory *inventory) {
 static int load_audio_inventory(audio_inventory *inventory) {
   memset(inventory, 0, sizeof(*inventory));
   inventory->reason = "unavailable";
-  const char *pactl = pactl_binary();
+  const char *pactl = audio_pactl_binary();
   const char *reason = "unavailable";
   json_object *info = NULL;
   json_object *sinks = NULL;
@@ -1379,22 +1364,22 @@ static int load_audio_inventory(audio_inventory *inventory) {
   json_object *playback = NULL;
   json_object *recording = NULL;
   json_object *cards = NULL;
-  info = pactl_json(pactl, "info", NULL, NULL, &reason);
+  info = audio_pactl_json(pactl, "info", NULL, NULL, &reason);
   if (!info)
     goto done;
-  sinks = pactl_json(pactl, "list", "sinks", NULL, &reason);
+  sinks = audio_pactl_json(pactl, "list", "sinks", NULL, &reason);
   if (!sinks)
     goto done;
-  sources = pactl_json(pactl, "list", "sources", NULL, &reason);
+  sources = audio_pactl_json(pactl, "list", "sources", NULL, &reason);
   if (!sources)
     goto done;
-  playback = pactl_json(pactl, "list", "sink-inputs", NULL, &reason);
+  playback = audio_pactl_json(pactl, "list", "sink-inputs", NULL, &reason);
   if (!playback)
     goto done;
-  recording = pactl_json(pactl, "list", "source-outputs", NULL, &reason);
+  recording = audio_pactl_json(pactl, "list", "source-outputs", NULL, &reason);
   if (!recording)
     goto done;
-  cards = pactl_json(pactl, "list", "cards", NULL, &reason);
+  cards = audio_pactl_json(pactl, "list", "cards", NULL, &reason);
   if (!cards)
     goto done;
   if (!json_object_is_type(info, json_type_object)) {
@@ -1552,7 +1537,7 @@ static void print_audio_inventory_text(const audio_inventory *inventory) {
          inventory->card_count);
 }
 
-static int parse_format(int argc, char **argv, int start, const char **format) {
+int audio_parse_format(int argc, char **argv, int start, const char **format) {
   *format = "text";
   for (int i = start; i < argc; i++) {
     if (strcmp(argv[i], "--format") == 0 && i + 1 < argc)
@@ -1661,7 +1646,7 @@ int settings_audio_policy_target(const char *direction, const char *requested,
   *available = 0;
   target[0] = '\0';
   if (requested) {
-    if (copy_bounded(target, target_size, requested) != 0)
+    if (audio_copy_bounded(target, target_size, requested) != 0)
       return -1;
     for (size_t i = 0; i < count; i++)
       if (strcmp(items[i].id, requested) == 0) {
@@ -1672,7 +1657,7 @@ int settings_audio_policy_target(const char *direction, const char *requested,
   }
   for (size_t i = 0; i < count; i++)
     if (items[i].is_default) {
-      if (copy_bounded(target, target_size, items[i].id) != 0)
+      if (audio_copy_bounded(target, target_size, items[i].id) != 0)
         return -1;
       *available = 1;
       break;
@@ -1824,7 +1809,7 @@ static int trusted_process_executable(pid_t process_pid, char *path,
     status = -1;
   }
   if (status == 0)
-    status = copy_bounded(path, path_size, resolved);
+    status = audio_copy_bounded(path, path_size, resolved);
   free(resolved);
   return status;
 }
@@ -1849,25 +1834,10 @@ int settings_audio_stream_executable(const char *stream_id, char *direction,
                                  &start_time) != 0)
     return -1;
   (void)start_time;
-  return copy_bounded(direction, direction_size,
-                      strcmp(selected->direction, "playback") == 0 ? "output"
-                                                                   : "input");
+  return audio_copy_bounded(
+      direction, direction_size,
+      strcmp(selected->direction, "playback") == 0 ? "output" : "input");
 }
-
-typedef struct {
-  char stream[32];
-  char direction[8];
-  char executable[PATH_MAX];
-  char current_device[32];
-  char current_raw[SETTINGS_FIELD_LIMIT + 1U];
-  char requested_raw[SETTINGS_FIELD_LIMIT + 1U];
-  pid_t process_pid;
-  uint64_t process_start_time;
-  int backend_index;
-  int volume_percent;
-  int muted;
-  int requested_available;
-} audio_broker_stream_state;
 
 static int stream_move_cohort(const audio_broker_stream_state *state,
                               const char *requested_device, char *cohort,
@@ -1934,7 +1904,7 @@ static int parse_broker_stream_token(const char *stream_id, char *direction,
   char *end = NULL;
   long parsed = strtol(digits, &end, 10);
   if (errno != 0 || !end || *end || parsed < 0 || parsed > INT_MAX ||
-      copy_bounded(direction, direction_size, mapped_direction) != 0)
+      audio_copy_bounded(direction, direction_size, mapped_direction) != 0)
     return -1;
   *index = (int)parsed;
   return 0;
@@ -1970,7 +1940,8 @@ static int load_broker_stream_state(const char *stream_id,
   state->backend_index = stream->backend_index;
   state->volume_percent = stream->volume_percent;
   state->muted = stream->muted;
-  if (copy_bounded(state->stream, sizeof(state->stream), stream_id) != 0 ||
+  if (audio_copy_bounded(state->stream, sizeof(state->stream), stream_id) !=
+          0 ||
       trusted_process_executable(stream->process_pid, state->executable,
                                  sizeof(state->executable),
                                  &state->process_start_time) != 0) {
@@ -1985,18 +1956,18 @@ static int load_broker_stream_state(const char *stream_id,
                                    inventory.backend_source_count,
                                    stream->target_index);
   if (current &&
-      (copy_bounded(state->current_device, sizeof(state->current_device),
-                    current->id) != 0 ||
-       copy_bounded(state->current_raw, sizeof(state->current_raw),
-                    current->raw_name) != 0))
+      (audio_copy_bounded(state->current_device, sizeof(state->current_device),
+                          current->id) != 0 ||
+       audio_copy_bounded(state->current_raw, sizeof(state->current_raw),
+                          current->raw_name) != 0))
     return -1;
   if (requested_device) {
     audio_endpoint *target =
         find_endpoint(&inventory, state->direction, requested_device);
     if (target) {
       state->requested_available = 1;
-      if (copy_bounded(state->requested_raw, sizeof(state->requested_raw),
-                       target->raw_name) != 0)
+      if (audio_copy_bounded(state->requested_raw, sizeof(state->requested_raw),
+                             target->raw_name) != 0)
         return -1;
     }
   }
@@ -2025,9 +1996,9 @@ static int broker_selection_equal(const settings_audio_route_selection *left,
 
 static void broker_receipt_status(settings_audio_broker_receipt *receipt,
                                   const char *status, const char *reason) {
-  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
-  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
-                     reason ? reason : "");
+  (void)audio_copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)audio_copy_bounded(receipt->reason, sizeof(receipt->reason),
+                           reason ? reason : "");
 }
 
 static int execute_broker_move(const audio_broker_stream_state *state,
@@ -2036,16 +2007,16 @@ static int execute_broker_move(const audio_broker_stream_state *state,
   int written = snprintf(index, sizeof(index), "%d", state->backend_index);
   if (written < 0 || (size_t)written >= sizeof(index))
     return -1;
-  const char *pactl = pactl_binary();
+  const char *pactl = audio_pactl_binary();
   char *argv[5] = {(char *)pactl,
                    strcmp(state->direction, "output") == 0
                        ? "move-sink-input"
                        : "move-source-output",
                    index, (char *)raw_target, NULL};
-  capture_result result = capture_command(argv);
+  audio_capture_result result = audio_capture_command(argv);
   *timed_out = result.timed_out;
   int status = result.data && !result.too_large && result.status == 0 ? 0 : -1;
-  capture_free(&result);
+  audio_capture_free(&result);
   return status;
 }
 
@@ -2066,7 +2037,7 @@ int settings_audio_broker_stream_ids(char ids[][32], size_t capacity,
     return -1;
   }
   for (size_t i = 0; i < inventory.stream_count; i++)
-    if (copy_bounded(ids[i], 32U, inventory.streams[i].id) != 0) {
+    if (audio_copy_bounded(ids[i], 32U, inventory.streams[i].id) != 0) {
       *reason = "invalid-response";
       return -1;
     }
@@ -2086,7 +2057,8 @@ int settings_audio_broker_apply_new(const char *stream_id,
   if (parse_broker_stream_token(stream_id, receipt->direction,
                                 sizeof(receipt->direction),
                                 &token_index) != 0 ||
-      copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) != 0) {
+      audio_copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) !=
+          0) {
     errno = EINVAL;
     return -1;
   }
@@ -2108,16 +2080,17 @@ int settings_audio_broker_apply_new(const char *stream_id,
       return 0;
     }
     receipt->policy_generation = selection.generation;
-    if (copy_bounded(receipt->source, sizeof(receipt->source),
-                     selection.source) != 0)
+    if (audio_copy_bounded(receipt->source, sizeof(receipt->source),
+                           selection.source) != 0)
       return -1;
     if (!selection.matched) {
       broker_receipt_status(receipt, "Skipped", "no-matching-rule");
       return 0;
     }
-    if (copy_bounded(receipt->device, sizeof(receipt->device),
-                     selection.device) != 0 ||
-        copy_bounded(receipt->rule, sizeof(receipt->rule), selection.rule) != 0)
+    if (audio_copy_bounded(receipt->device, sizeof(receipt->device),
+                           selection.device) != 0 ||
+        audio_copy_bounded(receipt->rule, sizeof(receipt->rule),
+                           selection.rule) != 0)
       return -1;
     loaded = load_broker_stream_state(stream_id, selection.device, &planned,
                                       &reason);
@@ -2213,7 +2186,7 @@ typedef struct {
   int rollback_verified;
 } audio_stream_move_receipt;
 
-static int endpoint_token_shape(const char *direction, const char *device) {
+int audio_endpoint_token_shape(const char *direction, const char *device) {
   if (!direction || !device)
     return 0;
   const char *prefix = strcmp(direction, "output") == 0  ? "output-"
@@ -2245,9 +2218,9 @@ static int stream_move_cohort_shape(const char *cohort) {
 
 static void stream_move_receipt_status(audio_stream_move_receipt *receipt,
                                        const char *status, const char *reason) {
-  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
-  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
-                     reason ? reason : "");
+  (void)audio_copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)audio_copy_bounded(receipt->reason, sizeof(receipt->reason),
+                           reason ? reason : "");
 }
 
 static int initialize_stream_move_receipt(audio_stream_move_receipt *receipt,
@@ -2258,11 +2231,14 @@ static int initialize_stream_move_receipt(audio_stream_move_receipt *receipt,
   int index = -1;
   if (parse_broker_stream_token(stream_id, receipt->direction,
                                 sizeof(receipt->direction), &index) != 0 ||
-      copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) != 0 ||
-      copy_bounded(receipt->original_device, sizeof(receipt->original_device),
-                   original_device) != 0 ||
-      copy_bounded(receipt->requested_device, sizeof(receipt->requested_device),
-                   requested_device) != 0)
+      audio_copy_bounded(receipt->stream, sizeof(receipt->stream), stream_id) !=
+          0 ||
+      audio_copy_bounded(receipt->original_device,
+                         sizeof(receipt->original_device),
+                         original_device) != 0 ||
+      audio_copy_bounded(receipt->requested_device,
+                         sizeof(receipt->requested_device),
+                         requested_device) != 0)
     return -1;
   (void)index;
   return 0;
@@ -2548,8 +2524,8 @@ static int settings_audio_stream_move_command(int argc, char **argv) {
   int backend_index = -1;
   if (parse_broker_stream_token(stream, direction, sizeof(direction),
                                 &backend_index) != 0 ||
-      !endpoint_token_shape(direction, requested_device) ||
-      (apply && (!endpoint_token_shape(direction, original_device) ||
+      !audio_endpoint_token_shape(direction, requested_device) ||
+      (apply && (!audio_endpoint_token_shape(direction, original_device) ||
                  !stream_move_cohort_shape(cohort)))) {
     fputs("synapse-settings: invalid existing-stream move token\n", stderr);
     return 2;
@@ -2604,21 +2580,105 @@ static int settings_audio_stream_move_command(int argc, char **argv) {
              : 1;
 }
 
-#ifdef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
-#include "audio_profile_port.inc"
-#endif
-#include "audio_control.inc"
+int audio_control_target_shape(const char *target, char *target_type,
+                               size_t target_type_size, int *stream_target) {
+  if (!target || !target_type || !target_type_size || !stream_target)
+    return -1;
+  const char *type = NULL;
+  *stream_target = 0;
+  if (audio_endpoint_token_shape("output", target))
+    type = "output";
+  else if (audio_endpoint_token_shape("input", target))
+    type = "input";
+  else {
+    char direction[8];
+    int backend_index = -1;
+    if (parse_broker_stream_token(target, direction, sizeof(direction),
+                                  &backend_index) != 0)
+      return -1;
+    (void)direction;
+    (void)backend_index;
+    type = strncmp(target, "playback-", 9U) == 0 ? "playback" : "recording";
+    *stream_target = 1;
+  }
+  return audio_copy_bounded(target_type, target_type_size, type);
+}
+
+int audio_load_control_state(const char *target, audio_control_state *state,
+                             const char **reason) {
+  if (!target || !state || !reason)
+    return -1;
+  memset(state, 0, sizeof(*state));
+  if (audio_control_target_shape(target, state->target_type,
+                                 sizeof(state->target_type),
+                                 &state->stream_target) != 0 ||
+      audio_copy_bounded(state->target, sizeof(state->target), target) != 0) {
+    *reason = "target-vanished";
+    return 1;
+  }
+  if (state->stream_target) {
+    int loaded = load_broker_stream_state(target, NULL, &state->stream, reason);
+    if (loaded != 0) {
+      if (loaded == 2)
+        *reason = "process-unavailable";
+      else if (loaded == 1)
+        *reason = "target-vanished";
+      else
+        *reason = "audio-unavailable";
+      return loaded == 2 ? 2 : loaded == 1 ? 1 : -1;
+    }
+    state->backend_index = state->stream.backend_index;
+    state->volume_percent = state->stream.volume_percent;
+    state->muted = state->stream.muted;
+    *reason = NULL;
+    return 0;
+  }
+
+  audio_inventory inventory;
+  if (load_audio_inventory(&inventory) != 0) {
+    *reason = "audio-unavailable";
+    return -1;
+  }
+  audio_endpoint *endpoint =
+      find_endpoint(&inventory, state->target_type, target);
+  if (!endpoint) {
+    *reason = "target-vanished";
+    return 1;
+  }
+  if (audio_copy_bounded(state->raw_name, sizeof(state->raw_name),
+                         endpoint->raw_name) != 0) {
+    *reason = "audio-unavailable";
+    return -1;
+  }
+  state->backend_index = endpoint->index;
+  state->volume_percent = endpoint->volume_percent;
+  state->muted = endpoint->muted;
+  *reason = NULL;
+  return 0;
+}
+
+int audio_control_identity_equal(const audio_control_state *left,
+                                 const audio_control_state *right) {
+  if (!left || !right || left->stream_target != right->stream_target ||
+      left->backend_index != right->backend_index ||
+      strcmp(left->target, right->target) != 0 ||
+      strcmp(left->target_type, right->target_type) != 0)
+    return 0;
+  if (left->stream_target)
+    return broker_identity_equal(&left->stream, &right->stream);
+  return strcmp(left->raw_name, right->raw_name) == 0;
+}
 
 static int execute_default(const char *direction,
                            const audio_endpoint *endpoint) {
-  const char *pactl = pactl_binary();
+  const char *pactl = audio_pactl_binary();
   char *argv[4] = {(char *)pactl,
                    strcmp(direction, "output") == 0 ? "set-default-sink"
                                                     : "set-default-source",
                    (char *)endpoint->raw_name, NULL};
-  capture_result result = capture_command(argv);
+  audio_capture_result result = audio_capture_command(argv);
   int status = result.data && !result.too_large && result.status == 0 ? 0 : -1;
-  capture_free(&result);
+  audio_capture_free(&result);
   return status;
 }
 
@@ -2635,6 +2695,9 @@ int settings_audio_command(int argc, char **argv) {
 #ifdef SYNAPSE_SETTINGS_WITH_GOXLR_STATUS
   if (strcmp(argv[1], "goxlr-status") == 0)
     return settings_audio_goxlr_status_command(argc, argv);
+  if (strcmp(argv[1], "plan-goxlr-control") == 0 ||
+      strcmp(argv[1], "set-goxlr-control") == 0)
+    return settings_audio_goxlr_control_command(argc, argv);
 #endif
   if (strcmp(argv[1], "plan-stream-move") == 0 ||
       strcmp(argv[1], "move-stream") == 0)
@@ -2653,7 +2716,7 @@ int settings_audio_command(int argc, char **argv) {
     return settings_audio_control_command(argc, argv);
   if (strcmp(argv[1], "inventory") == 0) {
     const char *format = NULL;
-    if (parse_format(argc, argv, 2, &format) != 0) {
+    if (audio_parse_format(argc, argv, 2, &format) != 0) {
       audio_usage(stderr);
       return 2;
     }

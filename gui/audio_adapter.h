@@ -1,115 +1,16 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #ifndef SYNAPSE_SETTINGS_GUI_AUDIO_ADAPTER_H
 #define SYNAPSE_SETTINGS_GUI_AUDIO_ADAPTER_H
 
-#include <QJsonObject>
+#include "audio_contracts_p.h"
+
+class AudioCommand;
 #include <QObject>
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
 
 #include <functional>
-
-struct AudioPresentationSnapshot {
-  bool available = false;
-  bool mutationAvailable = false;
-  QString reason;
-  QVariantList outputs;
-  QVariantList inputs;
-  QVariantList streams;
-  QVariantList cards;
-  bool profilePortAvailable = false;
-  bool profilePortMutationAvailable = false;
-  QString profilePortReason;
-  QVariantList profileCards;
-  QVariantList portEndpoints;
-  QVariantList routeRules;
-  bool routeBrokerAvailable = false;
-  bool routeBrokerActive = false;
-  QString routeBrokerReason;
-  bool routeEnforcementAvailable = false;
-  QString goxlrStatus;
-  QString goxlrReason;
-  bool goxlrProviderActive = false;
-  bool goxlrTruncated = false;
-  QVariantList goxlrDevices;
-};
-
-struct AudioSelectionPlan {
-  QString selection;
-  QString target;
-  QString targetType;
-  QString targetLabel;
-  QString originalSelection;
-  QString originalLabel;
-  QString requestedSelection;
-  QString requestedLabel;
-  QString requestedAvailability;
-  QString cohort;
-  bool changed = false;
-};
-
-namespace AudioContracts {
-
-bool decodeInventory(const QByteArray &payload,
-                     AudioPresentationSnapshot *snapshot, QString *errorId);
-bool decodeProfilePortInventory(const QByteArray &payload,
-                                AudioPresentationSnapshot *snapshot,
-                                QString *errorId);
-bool decodePolicy(const QByteArray &payload,
-                  AudioPresentationSnapshot *snapshot, QString *errorId);
-bool decodeBrokerStatus(const QByteArray &payload,
-                        AudioPresentationSnapshot *snapshot, QString *errorId);
-bool decodeGoxlrStatus(const QByteArray &payload,
-                       AudioPresentationSnapshot *snapshot, QString *errorId);
-bool decodeStreamMovePlan(const QByteArray &payload,
-                          const QString &expectedStream,
-                          const QString &expectedOriginalDevice,
-                          const QString &expectedRequestedDevice,
-                          QString *cohort, bool *changed, QString *errorId);
-bool decodeStreamMoveReceipt(const QByteArray &payload,
-                             const QString &expectedStream,
-                             const QString &expectedOriginalDevice,
-                             const QString &expectedRequestedDevice,
-                             QString *status, QString *reason, bool *changed,
-                             bool *rollbackAttempted, bool *rollbackVerified,
-                             QString *errorId);
-bool decodeDefaultPlan(const QByteArray &payload,
-                       const QString &expectedDirection,
-                       const QString &expectedDevice, bool *changed,
-                       QString *errorId);
-bool decodeDefaultReceipt(const QByteArray &payload,
-                          const QString &expectedDirection,
-                          const QString &expectedDevice, bool *changed,
-                          QString *errorId);
-bool decodeControlPlan(const QByteArray &payload, const QString &expectedTarget,
-                       const QString &expectedControl,
-                       const QVariant &expectedOriginalValue,
-                       const QVariant &expectedRequestedValue, QString *cohort,
-                       bool *changed, QString *errorId);
-bool decodeControlReceipt(const QByteArray &payload,
-                          const QString &expectedTarget,
-                          const QString &expectedControl,
-                          const QVariant &expectedOriginalValue,
-                          const QVariant &expectedRequestedValue,
-                          QString *status, QString *reason, bool *changed,
-                          bool *rollbackAttempted, bool *rollbackVerified,
-                          QString *errorId);
-bool decodeRouteReceipt(const QByteArray &payload,
-                        const QString &expectedAction,
-                        const QString &expectedDevice,
-                        const QString &expectedRule, QString *resultRule,
-                        bool *changed, QString *errorId);
-bool decodeSelectionPlan(const QByteArray &payload,
-                         const AudioSelectionPlan &expected,
-                         AudioSelectionPlan *decoded, QString *errorId);
-bool decodeSelectionReceipt(const QByteArray &payload,
-                            const AudioSelectionPlan &expected, QString *status,
-                            QString *reason, bool *changed,
-                            bool *rollbackAttempted, bool *rollbackVerified,
-                            QString *errorId);
-
-} // namespace AudioContracts
 
 class AudioAdapter final : public QObject {
   Q_OBJECT
@@ -151,6 +52,12 @@ class AudioAdapter final : public QObject {
       QString audioGoxlrReason READ audioGoxlrReason NOTIFY audioModelsChanged)
   Q_PROPERTY(bool audioGoxlrProviderActive READ audioGoxlrProviderActive NOTIFY
                  audioModelsChanged)
+  Q_PROPERTY(bool audioGoxlrPresenceKnown READ audioGoxlrPresenceKnown NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(bool audioGoxlrDevicePresent READ audioGoxlrDevicePresent NOTIFY
+                 audioModelsChanged)
+  Q_PROPERTY(bool audioGoxlrMutationAvailable READ audioGoxlrMutationAvailable
+                 NOTIFY audioModelsChanged)
   Q_PROPERTY(bool audioGoxlrTruncated READ audioGoxlrTruncated NOTIFY
                  audioModelsChanged)
   Q_PROPERTY(QVariantList audioGoxlrDevices READ audioGoxlrDevices NOTIFY
@@ -204,6 +111,9 @@ public:
   QString audioGoxlrStatus() const;
   QString audioGoxlrReason() const;
   bool audioGoxlrProviderActive() const;
+  bool audioGoxlrPresenceKnown() const;
+  bool audioGoxlrDevicePresent() const;
+  bool audioGoxlrMutationAvailable() const;
   bool audioGoxlrTruncated() const;
   QVariantList audioGoxlrDevices() const;
   QVariantList audioProcessChoices() const;
@@ -224,6 +134,13 @@ public:
                                    const QString &requestedDeviceId);
   Q_INVOKABLE bool setAudioVolume(const QString &targetId, int percent);
   Q_INVOKABLE bool setAudioMuted(const QString &targetId, bool muted);
+  Q_INVOKABLE bool setAudioGoxlrFaderVolume(int faderIndex, int value);
+  Q_INVOKABLE bool setAudioGoxlrFaderMuted(int faderIndex, bool muted);
+  Q_INVOKABLE bool setAudioGoxlrCoughMuted(bool muted);
+  Q_INVOKABLE bool setAudioGoxlrHeadphonesVolume(int value);
+  Q_INVOKABLE bool setAudioGoxlrLineOutVolume(int value);
+  Q_INVOKABLE bool openGoxlrMixer();
+  Q_INVOKABLE void deactivateAudio();
   Q_INVOKABLE bool planAudioProfile(const QString &cardId,
                                     const QString &profileId);
   Q_INVOKABLE bool planAudioPort(const QString &direction,
@@ -254,7 +171,7 @@ signals:
   void audioOperationFinished(const QString &statusId);
 
 private:
-  class Command;
+  using Command = AudioCommand;
 
   bool startCommand(
       const QStringList &arguments, int outputLimit,
@@ -289,6 +206,8 @@ private:
   QVariantMap audioControlTarget(const QString &targetId) const;
   bool startAudioControl(const QString &targetId, const QString &control,
                          const QVariant &requestedValue);
+  bool startAudioGoxlrControl(const QString &control, int requestedValue);
+  bool audioGoxlrControlState(const QString &control, int *originalValue) const;
   QVariantMap audioSelectionTarget(const QString &selection,
                                    const QString &targetType,
                                    const QString &targetId) const;
@@ -313,6 +232,7 @@ private:
   QString backendPath_;
   PathChooser pathChooser_;
   Command *command_ = nullptr;
+  Command *goxlrLaunchCommand_ = nullptr; // independent finite presentation request
   AudioPresentationSnapshot snapshot_;
   QVariantList processChoices_;
   QString pendingProcessDirection_;

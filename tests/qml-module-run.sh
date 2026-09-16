@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 qmltestrunner=${1:?qmltestrunner required}
 module_root=${2:?QML module root required}
 backend=${3:?test backend required}
+output_dir=${QML_MODULE_OUTPUT_DIR:-}
+if [[ -n "$output_dir" ]]; then
+  mkdir -m 0700 -- "$output_dir"
+fi
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+finish() {
+  local status=$? locale suffix
+  trap - EXIT
+  if [[ -n "$output_dir" ]]; then
+    printf '%s\n' "$status" >"$output_dir/status"
+    for locale in en_US it_IT; do
+      for suffix in log stdout stderr; do
+        if [[ -f "$work/$locale.$suffix" ]]; then
+          cp --update=none-fail -- "$work/$locale.$suffix" "$output_dir/$locale.$suffix" || status=74
+        fi
+      done
+    done
+  fi
+  rm -rf -- "$work"
+  exit "$status"
+}
+trap finish EXIT
 install -d -m 0755 "$work/audio" "$work/config" "$work/cache"
 install -d -m 0700 "$work/runtime"
 cat >"$work/audio/sinks.json" <<'JSON'
@@ -40,7 +60,7 @@ cat >"$work/goxlr-fake" <<'SH'
 #!/bin/sh
 set -eu
 [ "${1-} ${2-} ${3-}" = 'provider-status --format json' ] || exit 64
-printf '%s\n' '{"schema":"synapse.goxlr.provider-status/v2","deviceCount":1,"truncated":false,"devices":[{"id":"goxlr-1","model":"GoXLR Mini","systemOutputSupported":true,"stateAuthority":"provider-profile-model","systemOutput":{"routeToLineOut":true,"systemVolume":254,"lineOutVolume":255,"systemFader":"D","systemMuteState":"Unmuted","lineOutMix":"A","submixEnabled":false}}]}'
+printf '%s\n' '{"schema":"synapse.goxlr.provider-status/v3","providerActive":true,"deviceCount":1,"truncated":false,"devices":[{"id":"goxlr-1","model":"GoXLR Mini","profileModelReady":true,"generation":7,"stateAuthority":"provider-profile-model","hardwareReadback":false,"hardwareExactRollback":false,"popupCapabilities":{"faderAVolume":true,"faderBVolume":true,"faderCVolume":true,"faderDVolume":true,"faderAMute":true,"faderBMute":true,"faderCMute":true,"faderDMute":true,"coughMute":true,"headphonesVolume":true,"lineOutVolume":true},"faders":[{"fader":"A","channel":"Mic","volume":110,"muteState":"Unmuted"},{"fader":"B","channel":"Chat","volume":120,"muteState":"Unmuted"},{"fader":"C","channel":"Music","volume":130,"muteState":"MutedToAll"},{"fader":"D","channel":"System","volume":127,"muteState":"Unmuted"}],"cough":{"mode":"Toggle","muteState":"Unmuted"},"outputs":{"headphonesVolume":180,"lineOutVolume":200,"monitoredOutput":"Headphones"},"systemOutputSupported":true,"systemOutput":{"routeToLineOut":false,"systemVolume":127,"lineOutVolume":200,"systemFader":"D","systemMuteState":"Unmuted","lineOutMix":"A","submixEnabled":false}}]}'
 SH
 chmod 755 "$work/goxlr-fake"
 
@@ -60,9 +80,9 @@ for locale in en_US it_IT; do
     exit 1
   fi
   grep -Fq '0 failed' "$work/${locale}.log"
-  if grep -Eiq 'module .* is not installed|plugin cannot be loaded|referenceerror|typeerror|binding loop' \
-      "$work/${locale}.stderr"; then
-    cat "$work/${locale}.stderr" >&2
+  if grep -Eiq 'QWARN|module .* is not installed|plugin cannot be loaded|referenceerror|typeerror|binding loop' \
+      "$work/${locale}.stderr" "$work/${locale}.log"; then
+    cat "$work/${locale}.stderr" "$work/${locale}.log" >&2
     exit 1
   fi
 done

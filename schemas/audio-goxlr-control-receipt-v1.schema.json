@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schema/settings/audio-goxlr-control-receipt-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "control", "originalValue", "requestedValue", "observedValue", "changed", "rollbackAttempted", "rollbackSucceeded", "stateAuthority", "hardwareReadback", "hardwareExactRollback", "playbackStarted", "captureStarted", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-goxlr-control-receipt/v1"},
+    "status": {"enum": ["Applied", "AlreadyApplied", "Refused", "Drifted", "RolledBack", "RollbackFailed"]},
+    "control": {"enum": ["fader-a-volume", "fader-b-volume", "fader-c-volume", "fader-d-volume", "fader-a-mute", "fader-b-mute", "fader-c-mute", "fader-d-mute", "cough-mute", "headphones-volume", "line-out-volume"]},
+    "originalValue": {"type": "integer", "minimum": 0, "maximum": 255},
+    "requestedValue": {"type": "integer", "minimum": 0, "maximum": 255},
+    "observedValue": {"type": "integer", "minimum": 0, "maximum": 255},
+    "changed": {"type": "boolean"},
+    "rollbackAttempted": {"type": "boolean"},
+    "rollbackSucceeded": {"type": ["boolean", "null"]},
+    "stateAuthority": {"const": "provider-profile-model"},
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "playbackStarted": {"const": false},
+    "captureStarted": {"const": false},
+    "bounded": {"const": true}
+  }
+}

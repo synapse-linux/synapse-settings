@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.1.0-alpha.1
+
+- Correct the standalone and reusable Audio presentation above the deterministic
+  `QQuickStyle::Basic` substrate with Synapse-owned cards, buttons, sliders,
+  combo boxes, section headings, typography, spacing and contrast-safe text.
+- Keep feature QML host-neutral by propagating explicit theme tokens through
+  `AudioSettings` and `AudioShellHost`; the shell can inject its palette while
+  standalone Settings owns a strict live-reloading `synapse.theme.current/v3`
+  adapter.
+- Discover the standalone theme provider only as a trusted executable sibling,
+  `/usr/bin/synapse-theme`, or the fixed compatibility path
+  `/usr/local/bin/synapse-theme`, never through `PATH`; reject oversized output,
+  duplicate decoded JSON keys, unsafe IDs and deadline overruns, kill the
+  isolated provider process group on overflow or timeout, then retain the last
+  valid palette or deterministic fallback on failed responses.
+- Add rendered presentation, host-token propagation, disabled-control
+  readability, provider-fallback, atomic theme-reload and bounded test-settle
+  coverage. Expand all 64 catalogues to 148 active messages with reviewed
+  `en_US` and `it_IT` entries.
+- Align all first-party Settings source and SPDX metadata with the owner-selected MIT license, retaining separate licenses and notices for dependencies, and make the negative-tested 43-file license gate part of `test-all`.
+- Replace the read-only GoXLR v1 projection with the strict
+  `synapse.settings.audio-goxlr-status/v2` presentation contract decoded from
+  the complete `synapse.goxlr.provider-status/v3` source contract.
+- Project at most one ready device with four assigned faders, two-state mute,
+  toggle-mode cough mute, headphones, Line Out and eleven independent
+  capabilities; retain `provider-profile-model` authority and explicitly deny
+  hardware readback and hardware-exact rollback.
+- Probe `inventory --format json` separately after inactive or failed provider
+  status so attached hardware and provider activity remain distinct claims,
+  without starting or configuring the provider.
+- Add read-only `plan-goxlr-control` and acknowledged `set-goxlr-control`
+  mediation for the eleven fixed popup controls. Translate
+  `synapse-settings/audio-goxlr-popup/v1` to the private provider
+  acknowledgement only in C11 and strictly validate every upstream plan and
+  receipt field.
+- Require the provider's bounded cohort and second preflight, one setter, fresh
+  observation and persistence path; surface applied, unchanged, refused,
+  drifted, compensated and rollback-failed results without retrying an
+  uncertain mutation or claiming hardware restoration.
+- Extend the Qt adapter with exact status, plan and receipt decoders, serialized
+  plan/apply execution, complete post-result refresh, lifecycle cancellation,
+  typed fader/output/cough methods and a fixed `/usr/bin/synapse-goxlr gui`
+  launcher.
+- Add a lazy injectable `AudioPopupHost`, complete typed controls in the Audio
+  Settings section, and tests for inactive-attached, absent, partial-capability,
+  timeout, drift, provider-model compensation, launcher failure, close and
+  synchronous destruction paths.
+- Expand all 64 pinned GUI catalogues to the Alpha 11 message inventory, with
+  reviewed `en_US` and `it_IT`, explicit unfinished English fallback for the
+  other 62 catalogues and retained RTL projection.
+- Remove the unused legacy Qt status-v1 decoder and obsolete Settings GoXLR
+  status-v1 schema; production boundaries now require Settings v2/provider v3
+  and reject provider-start authority in Settings.
+- Keep the candidate source-only: fixtures perform all control operations; no
+  installation, provider activation, live USB mutation, playback, capture or
+  deployment is performed.
+
 ## 1.0.0-alpha.1
 
 - Add a separate bounded `audio profile-port-inventory` capability for card
@@ -62,6 +119,10 @@
   performed.
 
 ## 0.9.0-alpha.1
+
+The provider-status v2 and Settings status v1 contracts described in this
+historical entry were retired in 1.1.0-alpha.1 and are not accepted production
+inputs.
 
 - Add `audio goxlr-status` as a bounded read-only bridge to the fixed production
   `/usr/bin/synapse-goxlr provider-status --format json` command.

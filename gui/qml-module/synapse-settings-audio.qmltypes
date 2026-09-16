@@ -32,6 +32,9 @@ Module {
         Property { name: "audioGoxlrStatus"; type: "string"; isReadonly: true }
         Property { name: "audioGoxlrReason"; type: "string"; isReadonly: true }
         Property { name: "audioGoxlrProviderActive"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrPresenceKnown"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrDevicePresent"; type: "bool"; isReadonly: true }
+        Property { name: "audioGoxlrMutationAvailable"; type: "bool"; isReadonly: true }
         Property { name: "audioGoxlrTruncated"; type: "bool"; isReadonly: true }
         Property { name: "audioGoxlrDevices"; type: "QVariantList"; isReadonly: true }
         Property { name: "audioProcessChoices"; type: "QVariantList"; isReadonly: true }
@@ -84,6 +87,35 @@ Module {
             Parameter { name: "targetId"; type: "string" }
             Parameter { name: "muted"; type: "bool" }
         }
+        Method {
+            name: "setAudioGoxlrFaderVolume"
+            type: "bool"
+            Parameter { name: "faderIndex"; type: "int" }
+            Parameter { name: "value"; type: "int" }
+        }
+        Method {
+            name: "setAudioGoxlrFaderMuted"
+            type: "bool"
+            Parameter { name: "faderIndex"; type: "int" }
+            Parameter { name: "muted"; type: "bool" }
+        }
+        Method {
+            name: "setAudioGoxlrCoughMuted"
+            type: "bool"
+            Parameter { name: "muted"; type: "bool" }
+        }
+        Method {
+            name: "setAudioGoxlrHeadphonesVolume"
+            type: "bool"
+            Parameter { name: "value"; type: "int" }
+        }
+        Method {
+            name: "setAudioGoxlrLineOutVolume"
+            type: "bool"
+            Parameter { name: "value"; type: "int" }
+        }
+        Method { name: "openGoxlrMixer"; type: "bool" }
+        Method { name: "deactivateAudio" }
         Method {
             name: "planAudioProfile"
             type: "bool"

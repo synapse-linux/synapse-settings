@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 export LC_ALL=C LANG=C
 
@@ -7,7 +7,7 @@ module=${1:?staged production QML module required}
 plugin=$module/libsynapse_settings_audio_qml.so
 [[ -f $plugin && -x $plugin ]]
 for file in qmldir synapse-settings-audio.qmltypes AudioSettings.qml \
-            AudioSettingsSection.qml AudioShellHost.qml; do
+            AudioSettingsSection.qml AudioShellHost.qml AudioPopupHost.qml; do
   [[ -f $module/$file ]]
 done
 grep -Fqx 'module Synapse.Settings.Audio' "$module/qmldir"
@@ -23,10 +23,18 @@ grep -Fq 'name: "audioProfileCards"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "audioPortEndpoints"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "audioGoxlrStatus"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'name: "audioGoxlrDevices"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioGoxlrFaderVolume"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioGoxlrFaderMuted"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioGoxlrCoughMuted"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioGoxlrHeadphonesVolume"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "setAudioGoxlrLineOutVolume"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "openGoxlrMixer"' "$module/synapse-settings-audio.qmltypes"
+grep -Fq 'name: "deactivateAudio"' "$module/synapse-settings-audio.qmltypes"
 grep -Fq 'readonly property string goxlrStatus:' "$module/AudioShellHost.qml"
-if grep -Eiq 'name: "(set|plan|apply)Goxlr|stateAuthority|hardwareReadback|systemVolume|lineOutVolume|systemFader|systemMuteState|lineOutMix|submixEnabled' \
+grep -Fq 'readonly property bool goxlrControlsReady:' "$module/AudioPopupHost.qml"
+if grep -Eiq 'name: "(plan|apply).*Goxlr|stateAuthority|hardwareReadback|generation|systemVolume|systemFader|systemMuteState|lineOutMix|submixEnabled' \
     "$module/synapse-settings-audio.qmltypes" "$module"/*.qml ||
-   grep -Eiq 'goxlr-[1-8]|(^|[^[:alnum:]_])controlAvailable([^[:alnum:]_]|$)' \
+   grep -Eiq 'goxlr-[1-8]' \
     "$module/synapse-settings-audio.qmltypes" "$module"/*.qml; then
   printf 'forbidden GoXLR authority or raw provider state in feature QML\n' >&2
   exit 1
@@ -34,7 +42,9 @@ fi
 
 while IFS= read -r import_line; do
   case "$import_line" in
-    'import QtQuick'|'import QtQuick.Controls'|'import QtQuick.Layouts') ;;
+    'import QtQuick'|'import QtQuick.Controls'|'import QtQuick.Layouts'|\
+    'import QtQuick.Window'|\
+    'import Synapse.Settings.Audio 1.0 as SynapseAudio') ;;
     *) printf 'unexpected feature import: %s\n' "$import_line" >&2; exit 1 ;;
   esac
 done < <(grep -h '^import ' "$module"/*.qml)

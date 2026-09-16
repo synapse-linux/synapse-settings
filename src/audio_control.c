@@ -1,21 +1,18 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Included by audio.c after the private Audio inventory and stream definitions.
+// SPDX-License-Identifier: MIT
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+#include "audio_private.h"
+
+#include <errno.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef enum {
   AUDIO_CONTROL_VOLUME = 0,
   AUDIO_CONTROL_MUTE = 1
 } audio_control_kind;
-
-typedef struct {
-  char target[32];
-  char target_type[16];
-  char raw_name[SETTINGS_FIELD_LIMIT + 1U];
-  int backend_index;
-  int volume_percent;
-  int muted;
-  int stream_target;
-  audio_broker_stream_state stream;
-} audio_control_state;
 
 typedef struct {
   char status[16];
@@ -36,100 +33,9 @@ static const char *audio_control_name(audio_control_kind control) {
   return control == AUDIO_CONTROL_VOLUME ? "volume" : "mute";
 }
 
-static int audio_control_target_shape(const char *target, char *target_type,
-                                      size_t target_type_size,
-                                      int *stream_target) {
-  if (!target || !target_type || !target_type_size || !stream_target)
-    return -1;
-  const char *type = NULL;
-  *stream_target = 0;
-  if (endpoint_token_shape("output", target))
-    type = "output";
-  else if (endpoint_token_shape("input", target))
-    type = "input";
-  else {
-    char direction[8];
-    int backend_index = -1;
-    if (parse_broker_stream_token(target, direction, sizeof(direction),
-                                  &backend_index) != 0)
-      return -1;
-    (void)direction;
-    (void)backend_index;
-    type = strncmp(target, "playback-", 9U) == 0 ? "playback" : "recording";
-    *stream_target = 1;
-  }
-  return copy_bounded(target_type, target_type_size, type);
-}
-
-static int load_audio_control_state(const char *target,
-                                    audio_control_state *state,
-                                    const char **reason) {
-  if (!target || !state || !reason)
-    return -1;
-  memset(state, 0, sizeof(*state));
-  if (audio_control_target_shape(target, state->target_type,
-                                 sizeof(state->target_type),
-                                 &state->stream_target) != 0 ||
-      copy_bounded(state->target, sizeof(state->target), target) != 0) {
-    *reason = "target-vanished";
-    return 1;
-  }
-  if (state->stream_target) {
-    int loaded = load_broker_stream_state(target, NULL, &state->stream, reason);
-    if (loaded != 0) {
-      if (loaded == 2)
-        *reason = "process-unavailable";
-      else if (loaded == 1)
-        *reason = "target-vanished";
-      else
-        *reason = "audio-unavailable";
-      return loaded == 2 ? 2 : loaded == 1 ? 1 : -1;
-    }
-    state->backend_index = state->stream.backend_index;
-    state->volume_percent = state->stream.volume_percent;
-    state->muted = state->stream.muted;
-    *reason = NULL;
-    return 0;
-  }
-
-  audio_inventory inventory;
-  if (load_audio_inventory(&inventory) != 0) {
-    *reason = "audio-unavailable";
-    return -1;
-  }
-  audio_endpoint *endpoint =
-      find_endpoint(&inventory, state->target_type, target);
-  if (!endpoint) {
-    *reason = "target-vanished";
-    return 1;
-  }
-  if (copy_bounded(state->raw_name, sizeof(state->raw_name),
-                   endpoint->raw_name) != 0) {
-    *reason = "audio-unavailable";
-    return -1;
-  }
-  state->backend_index = endpoint->index;
-  state->volume_percent = endpoint->volume_percent;
-  state->muted = endpoint->muted;
-  *reason = NULL;
-  return 0;
-}
-
 static int audio_control_state_value(const audio_control_state *state,
                                      audio_control_kind control) {
   return control == AUDIO_CONTROL_VOLUME ? state->volume_percent : state->muted;
-}
-
-static int audio_control_identity_equal(const audio_control_state *left,
-                                        const audio_control_state *right) {
-  if (!left || !right || left->stream_target != right->stream_target ||
-      left->backend_index != right->backend_index ||
-      strcmp(left->target, right->target) != 0 ||
-      strcmp(left->target_type, right->target_type) != 0)
-    return 0;
-  if (left->stream_target)
-    return broker_identity_equal(&left->stream, &right->stream);
-  return strcmp(left->raw_name, right->raw_name) == 0;
 }
 
 static int audio_control_cohort(const audio_control_state *state,
@@ -339,7 +245,8 @@ static int initialize_audio_control_receipt(audio_control_receipt *receipt,
                                             int requested_value) {
   memset(receipt, 0, sizeof(*receipt));
   int stream_target = 0;
-  if (copy_bounded(receipt->target, sizeof(receipt->target), target) != 0 ||
+  if (audio_copy_bounded(receipt->target, sizeof(receipt->target), target) !=
+          0 ||
       audio_control_target_shape(target, receipt->target_type,
                                  sizeof(receipt->target_type),
                                  &stream_target) != 0)
@@ -354,9 +261,9 @@ static int initialize_audio_control_receipt(audio_control_receipt *receipt,
 static void audio_control_receipt_status(audio_control_receipt *receipt,
                                          const char *status,
                                          const char *reason) {
-  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
-  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
-                     reason ? reason : "");
+  (void)audio_copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)audio_copy_bounded(receipt->reason, sizeof(receipt->reason),
+                           reason ? reason : "");
 }
 
 static void print_audio_control_receipt(const audio_control_receipt *receipt,
@@ -447,13 +354,13 @@ static int execute_audio_control(const audio_control_state *state,
                     : snprintf(requested, sizeof(requested), "%d", value);
   if (written < 0 || (size_t)written >= sizeof(requested))
     return -1;
-  const char *pactl = pactl_binary();
+  const char *pactl = audio_pactl_binary();
   char *argv[5] = {(char *)pactl, (char *)operation, (char *)identity,
                    requested, NULL};
-  capture_result result = capture_command(argv);
+  audio_capture_result result = audio_capture_command(argv);
   *timed_out = result.timed_out;
   int status = result.data && result.status == 0 ? 0 : -1;
-  capture_free(&result);
+  audio_capture_free(&result);
   return status;
 }
 
@@ -463,7 +370,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
                                 audio_control_receipt *receipt) {
   audio_control_state first;
   const char *reason = NULL;
-  int loaded = load_audio_control_state(target, &first, &reason);
+  int loaded = audio_load_control_state(target, &first, &reason);
   if (loaded != 0) {
     audio_control_receipt_status(receipt, "Refused",
                                  loaded == 2   ? "process-unavailable"
@@ -484,7 +391,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
   }
 
   audio_control_state planned;
-  loaded = load_audio_control_state(target, &planned, &reason);
+  loaded = audio_load_control_state(target, &planned, &reason);
   if (loaded != 0) {
     audio_control_receipt_status(receipt, "Refused",
                                  loaded == 2   ? "process-unavailable"
@@ -512,7 +419,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
   int mutation_status = execute_audio_control(
       &planned, control, requested_value, &mutation_timed_out);
   audio_control_state after;
-  loaded = load_audio_control_state(target, &after, &reason);
+  loaded = audio_load_control_state(target, &after, &reason);
   if (loaded != 0) {
     audio_control_receipt_status(receipt, "Failed",
                                  loaded == 1   ? "target-vanished"
@@ -539,7 +446,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
     audio_control_state rollback_state;
     const char *rollback_reason = NULL;
     loaded =
-        load_audio_control_state(target, &rollback_state, &rollback_reason);
+        audio_load_control_state(target, &rollback_state, &rollback_reason);
     if (loaded != 0) {
       failure_reason = loaded == 1   ? "target-vanished"
                        : loaded == 2 ? "target-identity-changed"
@@ -560,7 +467,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
       (void)rollback_timed_out;
       audio_control_state restored;
       const char *restore_reason = NULL;
-      if (load_audio_control_state(target, &restored, &restore_reason) == 0 &&
+      if (audio_load_control_state(target, &restored, &restore_reason) == 0 &&
           audio_control_identity_equal(&planned, &restored) &&
           audio_control_state_value(&restored, control) == original_value) {
         receipt->rollback_verified = 1;
@@ -572,7 +479,7 @@ static void apply_audio_control(const char *target, audio_control_kind control,
   audio_control_receipt_status(receipt, "Failed", failure_reason);
 }
 
-static int settings_audio_control_command(int argc, char **argv) {
+int settings_audio_control_command(int argc, char **argv) {
   int apply =
       strcmp(argv[1], "set-volume") == 0 || strcmp(argv[1], "set-mute") == 0;
   audio_control_kind control =
@@ -626,7 +533,7 @@ static int settings_audio_control_command(int argc, char **argv) {
   if (!apply) {
     audio_control_state state;
     const char *reason = NULL;
-    int loaded = load_audio_control_state(target, &state, &reason);
+    int loaded = audio_load_control_state(target, &state, &reason);
     if (loaded != 0) {
       fprintf(stderr,
               "synapse-settings: Audio control target unavailable: %s\n",

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synapse.invalid/schema/settings/audio-goxlr-control-plan-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "control", "originalValue", "requestedValue", "cohort", "requiresAcknowledgement", "stateAuthority", "hardwareReadback", "hardwareExactRollback", "applied", "bounded"],
+  "properties": {
+    "schema": {"const": "synapse.settings.audio-goxlr-control-plan/v1"},
+    "status": {"const": "Planned"},
+    "control": {"enum": ["fader-a-volume", "fader-b-volume", "fader-c-volume", "fader-d-volume", "fader-a-mute", "fader-b-mute", "fader-c-mute", "fader-d-mute", "cough-mute", "headphones-volume", "line-out-volume"]},
+    "originalValue": {"type": "integer", "minimum": 0, "maximum": 255},
+    "requestedValue": {"type": "integer", "minimum": 0, "maximum": 255},
+    "cohort": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "requiresAcknowledgement": {"const": "synapse-settings/audio-goxlr-popup/v1"},
+    "stateAuthority": {"const": "provider-profile-model"},
+    "hardwareReadback": {"const": false},
+    "hardwareExactRollback": {"const": false},
+    "applied": {"const": false},
+    "bounded": {"const": true}
+  }
+}

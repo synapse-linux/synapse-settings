@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include "audio_adapter.h"
+#include "audio_command_p.h"
 #include "localization.h"
+#include "fixture_child.h"
+#include <sys/prctl.h>
 
 #include <QCoreApplication>
 #include <QFile>
@@ -49,7 +52,15 @@ public:
         QByteArrayLiteral("SYNAPSE_ADAPTER_REAL_BACKEND"),
         QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_RESPONSE"),
         QByteArrayLiteral("SYNAPSE_ADAPTER_OVERRIDE_EXIT"),
-        QByteArrayLiteral("SYNAPSE_ADAPTER_WRAPPER_LOG")};
+        QByteArrayLiteral("SYNAPSE_ADAPTER_WRAPPER_LOG"),
+        QByteArrayLiteral("SYNAPSE_SETTINGS_GOXLR_APP_FIXTURE"),
+        QByteArrayLiteral("SYNAPSE_SETTINGS_GOXLR_APP_LOG"),
+        QByteArrayLiteral("SYNAPSE_SETTINGS_GOXLR_APP_MODE"),
+        QByteArrayLiteral("XDG_SESSION_ID"),
+        QByteArrayLiteral("WAYLAND_DISPLAY"),
+        QByteArrayLiteral("LANG"),
+        QByteArrayLiteral("LC_ALL"),
+        QByteArrayLiteral("LC_MESSAGES")};
     for (const QByteArray &name : names) {
       names_.append(name);
       values_.append(qgetenv(name.constData()));
@@ -277,15 +288,59 @@ public:
     const QByteArray goxlrScript = QByteArrayLiteral(
         "#!/bin/sh\n"
         "set -eu\n"
+        "printf '%s\\n' \"$*\" >>\"$SYNAPSE_GOXLR_GUI_TEST_LOG\"\n"
+        "if [ \"$*\" = 'plan-popup-control --control fader-a-volume "
+        "--value 123 --format json' ]; then\n"
+        "printf '%s\\n' '{\"schema\":\"synapse.goxlr.popup-control-plan/v1\","
+        "\"device\":\"goxlr-1\",\"model\":\"GoXLR Mini\",\"control\":"
+        "\"fader-a-volume\",\"channel\":\"Mic\",\"generation\":7,"
+        "\"original\":{\"kind\":\"Volume\",\"value\":110},"
+        "\"requested\":{\"kind\":\"Volume\",\"value\":123},"
+        "\"cohort\":\"0123456789abcdef\",\"requiresAcknowledgement\":"
+        "\"synapse-goxlr/popup-control/v1\",\"stateAuthority\":"
+        "\"provider-profile-model\",\"hardwareReadback\":false,"
+        "\"hardwareExactRollback\":false,\"bounded\":true}'\n"
+        "exit 0\nfi\n"
+        "if [ \"$*\" = 'apply-popup-control --control fader-a-volume "
+        "--value 123 --cohort 0123456789abcdef --ack "
+        "synapse-goxlr/popup-control/v1 --format json' ]; then\n"
+        "printf '%s\\n' '{\"schema\":\"synapse.goxlr.popup-control-receipt/v1\","
+        "\"device\":\"goxlr-1\",\"model\":\"GoXLR Mini\",\"status\":"
+        "\"Applied\",\"control\":\"fader-a-volume\",\"channel\":\"Mic\","
+        "\"original\":{\"kind\":\"Volume\",\"value\":110},"
+        "\"requested\":{\"kind\":\"Volume\",\"value\":123},"
+        "\"observed\":{\"kind\":\"Volume\",\"value\":123},"
+        "\"changed\":true,\"stateAuthority\":\"provider-profile-model\","
+        "\"hardwareReadback\":false,\"rollback\":{\"available\":true,"
+        "\"authority\":\"provider-profile-model-only\",\"hardwareExact\":"
+        "false,\"attempted\":false,\"succeeded\":null},"
+        "\"playbackStarted\":false,\"captureStarted\":false,"
+        "\"bounded\":true}'\n"
+        "exit 0\nfi\n"
         "[ \"${1-} ${2-} ${3-}\" = 'provider-status --format json' ] || "
         "exit 64\n"
-        "printf '%s\\n' '{\"schema\":\"synapse.goxlr.provider-status/v2\","
-        "\"deviceCount\":1,\"truncated\":false,\"devices\":[{\"id\":"
-        "\"goxlr-1\",\"model\":\"GoXLR Mini\","
-        "\"systemOutputSupported\":true,\"stateAuthority\":"
-        "\"provider-profile-model\",\"systemOutput\":{"
-        "\"routeToLineOut\":true,\"systemVolume\":254,"
-        "\"lineOutVolume\":255,\"systemFader\":\"D\","
+        "printf '%s\\n' '{\"schema\":\"synapse.goxlr.provider-status/v3\","
+        "\"providerActive\":true,\"deviceCount\":1,\"truncated\":false,"
+        "\"devices\":[{\"id\":\"goxlr-1\",\"model\":\"GoXLR Mini\","
+        "\"profileModelReady\":true,\"generation\":7,\"stateAuthority\":"
+        "\"provider-profile-model\",\"hardwareReadback\":false,"
+        "\"hardwareExactRollback\":false,\"popupCapabilities\":{"
+        "\"faderAVolume\":true,\"faderBVolume\":true,"
+        "\"faderCVolume\":true,\"faderDVolume\":true,"
+        "\"faderAMute\":true,\"faderBMute\":true,\"faderCMute\":true,"
+        "\"faderDMute\":true,\"coughMute\":true,"
+        "\"headphonesVolume\":true,\"lineOutVolume\":true},\"faders\":["
+        "{\"fader\":\"A\",\"channel\":\"Mic\",\"volume\":110,"
+        "\"muteState\":\"Unmuted\"},{\"fader\":\"B\",\"channel\":"
+        "\"Chat\",\"volume\":120,\"muteState\":\"Unmuted\"},{"
+        "\"fader\":\"C\",\"channel\":\"Music\",\"volume\":130,"
+        "\"muteState\":\"MutedToAll\"},{\"fader\":\"D\",\"channel\":"
+        "\"System\",\"volume\":127,\"muteState\":\"Unmuted\"}],"
+        "\"cough\":{\"mode\":\"Toggle\",\"muteState\":\"Unmuted\"},"
+        "\"outputs\":{\"headphonesVolume\":180,\"lineOutVolume\":200,"
+        "\"monitoredOutput\":\"Headphones\"},\"systemOutputSupported\":true,"
+        "\"systemOutput\":{\"routeToLineOut\":false,\"systemVolume\":127,"
+        "\"lineOutVolume\":200,\"systemFader\":\"D\","
         "\"systemMuteState\":\"Unmuted\",\"lineOutMix\":\"A\","
         "\"submixEnabled\":false}}]}'\n");
     valid_ = writeFile(goxlr_, goxlrScript,
@@ -301,6 +356,7 @@ public:
   QString selectionLog() const {
     return root_ + QStringLiteral("/selection.log");
   }
+  QString goxlrLog() const { return root_ + QStringLiteral("/goxlr.log"); }
   QString policy() const { return policy_; }
 
   void activate() const {
@@ -311,6 +367,7 @@ public:
     qputenv("SYNAPSE_AUDIO_FIXTURES", audio_.toUtf8());
     qputenv("SYNAPSE_AUDIO_ROUTE_POLICY", policy_.toUtf8());
     qputenv("SYNAPSE_GOXLR", goxlr_.toUtf8());
+    qputenv("SYNAPSE_GOXLR_GUI_TEST_LOG", goxlrLog().toUtf8());
   }
 
 private:
@@ -431,6 +488,141 @@ private slots:
     QCOMPARE(loaded.constFirst().constFirst().toBool(), false);
     QVERIFY(!adapter.audioSnapshotReady());
     QCOMPARE(adapter.audioErrorId(), QStringLiteral("backend-failed"));
+  }
+
+  void goxlrMixerLauncherRequiresReceipt_data() {
+    QTest::addColumn<QByteArray>("mode");
+    for (const char *mode : {"valid", "delay", "empty", "duplicate", "extra",
+                             "overflow", "focus", "not-ready", "failed", "timeout"})
+      QTest::newRow(mode) << QByteArray(mode);
+  }
+
+  void goxlrMixerLauncherRequiresReceipt() {
+    QFETCH(QByteArray, mode);
+    ScopedEnvironment environment;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString launcher = directory.path() + QStringLiteral("/goxlr-app");
+    const QString log = directory.path() + QStringLiteral("/argv.log");
+    const QString source = QFileInfo(QString::fromLocal8Bit(__FILE__)).absolutePath() +
+        QStringLiteral("/goxlr_activation_fixture.py");
+    QVERIFY(QFile::copy(source, launcher));
+    QVERIFY(QFile::setPermissions(launcher, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_GOXLR_APP_FIXTURE", launcher.toUtf8()));
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_GOXLR_APP_LOG", log.toUtf8()));
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_GOXLR_APP_MODE", mode));
+    QVERIFY(qputenv("XDG_SESSION_ID", QByteArrayLiteral("fixture-session")));
+    QVERIFY(qputenv("WAYLAND_DISPLAY", QByteArrayLiteral("wayland-fixture")));
+    AudioAdapter adapter(testBackend(), nullptr);
+    QVERIFY(!adapter.setAudioGoxlrFaderMuted(-1, false));
+    int reentry = 0;
+    connect(&adapter, &AudioAdapter::audioOperationStateChanged, &adapter, [&]() {
+      if (adapter.audioStatusId().isEmpty() && adapter.audioErrorId().isEmpty()) {
+        ++reentry;
+        QVERIFY(!adapter.openGoxlrMixer());
+      }
+    });
+    QVERIFY(adapter.openGoxlrMixer());
+    QCOMPARE(reentry, 1);
+    QCOMPARE(adapter.audioStatusId(), QString()); // fork/start is not readiness
+    QVERIFY(!adapter.openGoxlrMixer());
+    const bool valid = mode == "valid" || mode == "delay";
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter.audioStatusId().isEmpty() || !adapter.audioErrorId().isEmpty(), 6500);
+    QCOMPARE(adapter.audioStatusId(), valid ? QStringLiteral("audio-goxlr-mixer-opened") : QString());
+    QCOMPARE(adapter.audioErrorId(), valid ? QString() : QStringLiteral("audio-goxlr-mixer-unavailable"));
+    QVERIFY(!adapter.audioBusy());
+    QFile argvLog(log);
+    QVERIFY(argvLog.open(QIODevice::ReadOnly));
+    const auto record = QJsonDocument::fromJson(argvLog.readAll()).object();
+    QCOMPARE(record.value(QStringLiteral("argv")).toArray(), QJsonArray{"--open-or-activate"});
+    QCOMPARE(record.value(QStringLiteral("session")).toString(), QStringLiteral("fixture-session"));
+    QCOMPARE(record.value(QStringLiteral("display")).toString(), QStringLiteral("wayland-fixture"));
+    QTest::qWait(50); // no queued retry or provider/inventory refresh
+    QVERIFY(!adapter.audioSnapshotReady());
+  }
+
+  void goxlrActivationSignalDestructionStartsNoClient() {
+    ScopedEnvironment environment;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString launcher = directory.path() + QStringLiteral("/goxlr-app");
+    const QString log = directory.path() + QStringLiteral("/argv.log");
+    const QString source = QFileInfo(QString::fromLocal8Bit(__FILE__)).absolutePath() +
+        QStringLiteral("/goxlr_activation_fixture.py");
+    QVERIFY(QFile::copy(source, launcher));
+    QVERIFY(QFile::setPermissions(launcher, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_GOXLR_APP_FIXTURE", launcher.toUtf8()));
+    QVERIFY(qputenv("SYNAPSE_SETTINGS_GOXLR_APP_LOG", log.toUtf8()));
+    QPointer<AudioAdapter> adapter = new AudioAdapter(testBackend(), nullptr);
+    QVERIFY(!adapter->setAudioGoxlrFaderMuted(-1, false));
+    connect(adapter, &AudioAdapter::audioOperationStateChanged, this, [&]() { delete adapter.data(); });
+    QVERIFY(!adapter->openGoxlrMixer());
+    QVERIFY(adapter.isNull());
+    QTest::qWait(100);
+    QVERIFY(!QFileInfo::exists(log));
+  }
+
+  void guiActivationPreservesLocalePrecedence_data() {
+    QTest::addColumn<QByteArray>("all");
+    QTest::addColumn<QByteArray>("messages");
+    QTest::addColumn<QByteArray>("expected");
+    QTest::newRow("lang") << QByteArray() << QByteArray() << QByteArray("it_IT.UTF-8\n");
+    QTest::newRow("messages") << QByteArray() << QByteArray("ar.UTF-8") << QByteArray("ar.UTF-8\n");
+    QTest::newRow("all") << QByteArray("en_US.UTF-8") << QByteArray("ar.UTF-8") << QByteArray("en_US.UTF-8\n");
+  }
+
+  void guiActivationPreservesLocalePrecedence() {
+    ScopedEnvironment environment;
+    QFETCH(QByteArray, all);
+    QFETCH(QByteArray, messages);
+    QFETCH(QByteArray, expected);
+    qputenv("LANG", "it_IT.UTF-8");
+    qunsetenv("LC_ALL");
+    qunsetenv("LC_MESSAGES");
+    if (!all.isEmpty()) qputenv("LC_ALL", all);
+    if (!messages.isEmpty()) qputenv("LC_MESSAGES", messages);
+    for (const auto purpose : {AudioCommand::Environment::GuiActivation,
+                               AudioCommand::Environment::Audio}) {
+      bool done = false;
+      int status = -1;
+      QByteArray output;
+      QString error;
+      auto *command = new AudioCommand(QStringLiteral("/usr/bin/python3"),
+          {QStringLiteral("-I"), QStringLiteral("-c"),
+           QStringLiteral("import os; print(os.getenv('LC_ALL') or os.getenv('LC_MESSAGES') or os.getenv('LANG'))")},
+          64, 1000, [&](int code, const QByteArray &data, const QString &failure) {
+            status = code;
+            output = data;
+            error = failure;
+            done = true;
+          }, this, purpose);
+      command->start();
+      QTRY_VERIFY_WITH_TIMEOUT(done, 1500);
+      QCOMPARE(status, 0);
+      QVERIFY(error.isEmpty());
+      QCOMPARE(output, purpose == AudioCommand::Environment::GuiActivation
+                           ? expected : QByteArray("C.UTF-8\n"));
+    }
+  }
+
+  void graphicalEnvironmentDoesNotReachAudioCommands() {
+    ScopedEnvironment environment;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString executable = directory.path() + QStringLiteral("/environment");
+    QVERIFY(writeFile(executable, QByteArrayLiteral("#!/usr/bin/python3 -I\nimport os,sys\nsys.stdout.write(str('WAYLAND_DISPLAY' in os.environ or 'XDG_SESSION_ID' in os.environ))\n"),
+                      QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    QVERIFY(qputenv("XDG_SESSION_ID", QByteArrayLiteral("must-not-reach-audio")));
+    QVERIFY(qputenv("WAYLAND_DISPLAY", QByteArrayLiteral("must-not-reach-audio")));
+    bool completed = false;
+    auto *command = new AudioCommand(executable, {}, 64, 1000,
+        [&](int code, const QByteArray &payload, const QString &error) {
+          completed = true;
+          QCOMPARE(code, 0); QCOMPARE(error, QString());
+          QCOMPARE(payload, QByteArrayLiteral("False"));
+        }, this);
+    command->start();
+    QTRY_VERIFY_WITH_TIMEOUT(completed, 1500);
   }
 
   void contractDecodersRejectMalformedInput() {
@@ -559,62 +751,81 @@ private slots:
         !AudioContracts::decodeBrokerStatus(expandedBroker, &snapshot, &error));
 
     const QByteArray goxlrReady = QByteArrayLiteral(
-        "{\"schema\":\"synapse.settings.audio-goxlr-status/v1\","
+        "{\"schema\":\"synapse.settings.audio-goxlr-status/v2\","
         "\"status\":\"Ready\",\"reason\":null,\"providerActive\":true,"
-        "\"deviceCount\":2,\"truncated\":false,\"devices\":[{\"id\":"
-        "\"goxlr-2\",\"model\":\"GoXLR\","
-        "\"systemOutputSupported\":false,\"controlAvailable\":false},{"
-        "\"id\":\"goxlr-1\",\"model\":\"GoXLR Mini\","
-        "\"systemOutputSupported\":true,\"controlAvailable\":false}],"
-        "\"stateAuthority\":\"provider-profile-model\","
-        "\"hardwareReadback\":false,\"hardwareExactRollback\":false,"
-        "\"mutationAvailable\":false,\"readOnly\":true,"
-        "\"bounded\":true}\n");
+        "\"presenceKnown\":true,\"devicePresent\":true,\"deviceCount\":1,"
+        "\"devices\":[{\"model\":\"GoXLR Mini\","
+        "\"profileModelReady\":true,\"systemOutputSupported\":true,"
+        "\"controlAvailable\":true,\"faders\":[{\"fader\":\"A\","
+        "\"channel\":\"Mic\",\"volume\":110,\"muted\":false,"
+        "\"volumeAvailable\":true,\"muteAvailable\":true},{\"fader\":\"B\","
+        "\"channel\":\"Chat\",\"volume\":120,\"muted\":false,"
+        "\"volumeAvailable\":true,\"muteAvailable\":true},{\"fader\":\"C\","
+        "\"channel\":\"Music\",\"volume\":130,\"muted\":true,"
+        "\"volumeAvailable\":true,\"muteAvailable\":true},{\"fader\":\"D\","
+        "\"channel\":\"System\",\"volume\":127,\"muted\":false,"
+        "\"volumeAvailable\":true,\"muteAvailable\":true}],\"cough\":{"
+        "\"mode\":\"Toggle\",\"muted\":false,\"available\":true},"
+        "\"outputs\":{\"headphonesVolume\":180,\"lineOutVolume\":200,"
+        "\"monitoredOutput\":\"Headphones\",\"headphonesAvailable\":true,"
+        "\"lineOutAvailable\":true}}],\"stateAuthority\":"
+        "\"provider-profile-model\",\"hardwareReadback\":false,"
+        "\"hardwareExactRollback\":false,\"mutationAvailable\":true,"
+        "\"inspectionReadOnly\":true,\"bounded\":true}\n");
     QVERIFY(AudioContracts::decodeGoxlrStatus(goxlrReady, &snapshot, &error));
     QCOMPARE(snapshot.goxlrStatus, QStringLiteral("Ready"));
     QVERIFY(snapshot.goxlrReason.isEmpty());
     QVERIFY(snapshot.goxlrProviderActive);
-    QCOMPARE(snapshot.goxlrDevices.size(), 2);
-    QCOMPARE(snapshot.goxlrDevices.constFirst()
-                 .toMap()
-                 .value(QStringLiteral("model"))
-                 .toString(),
+    QVERIFY(snapshot.goxlrPresenceKnown);
+    QVERIFY(snapshot.goxlrDevicePresent);
+    QVERIFY(snapshot.goxlrMutationAvailable);
+    QCOMPARE(snapshot.goxlrDevices.size(), 1);
+    const QVariantMap goxlrDevice = snapshot.goxlrDevices.constFirst().toMap();
+    QCOMPARE(goxlrDevice.value(QStringLiteral("model")).toString(),
              QStringLiteral("GoXLR Mini"));
-    QVERIFY(!snapshot.goxlrDevices.constFirst().toMap().contains(
-        QStringLiteral("id")));
-    QVERIFY(!snapshot.goxlrDevices.constFirst().toMap().contains(
-        QStringLiteral("controlAvailable")));
+    QVERIFY(!goxlrDevice.contains(QStringLiteral("id")));
+    QCOMPARE(goxlrDevice.value(QStringLiteral("faders"))
+                 .toList()
+                 .at(2)
+                 .toMap()
+                 .value(QStringLiteral("muted"))
+                 .toBool(),
+             true);
     QByteArray falseGoxlr = goxlrReady;
     falseGoxlr.replace("\"hardwareReadback\":false",
                        "\"hardwareReadback\":true");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
     falseGoxlr = goxlrReady;
-    falseGoxlr.replace("\"reason\":null", "\"reason\":\"provider-inactive\"");
+    falseGoxlr.replace("\"presenceKnown\":true", "\"presenceKnown\":false");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
     falseGoxlr = goxlrReady;
-    falseGoxlr.replace("\"deviceCount\":2", "\"deviceCount\":1");
+    falseGoxlr.replace("\"mutationAvailable\":true",
+                       "\"mutationAvailable\":false");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
     falseGoxlr = goxlrReady;
-    falseGoxlr.replace("\"goxlr-2\"", "\"goxlr-1\"");
+    falseGoxlr.replace("\"fader\":\"A\"", "\"fader\":\"D\"");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
     falseGoxlr = goxlrReady;
-    falseGoxlr.replace("\"truncated\":false", "\"truncated\":true");
+    falseGoxlr.replace("\"mode\":\"Toggle\"", "\"mode\":\"Hold\"");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
     falseGoxlr = goxlrReady;
     falseGoxlr.replace("\"bounded\":true", "\"unknown\":0,\"bounded\":true");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(falseGoxlr, &snapshot, &error));
+
     const QByteArray goxlrUnavailable = QByteArrayLiteral(
-        "{\"schema\":\"synapse.settings.audio-goxlr-status/v1\","
+        "{\"schema\":\"synapse.settings.audio-goxlr-status/v2\","
         "\"status\":\"Unavailable\",\"reason\":\"adapter-unavailable\","
-        "\"providerActive\":false,\"deviceCount\":0,"
-        "\"truncated\":false,\"devices\":[],\"stateAuthority\":"
-        "\"provider-profile-model\",\"hardwareReadback\":false,"
-        "\"hardwareExactRollback\":false,\"mutationAvailable\":false,"
-        "\"readOnly\":true,\"bounded\":true}\n");
+        "\"providerActive\":false,\"presenceKnown\":false,"
+        "\"devicePresent\":false,\"deviceCount\":0,\"devices\":[],"
+        "\"stateAuthority\":\"provider-profile-model\","
+        "\"hardwareReadback\":false,\"hardwareExactRollback\":false,"
+        "\"mutationAvailable\":false,\"inspectionReadOnly\":true,"
+        "\"bounded\":true}\n");
     QVERIFY(
         AudioContracts::decodeGoxlrStatus(goxlrUnavailable, &snapshot, &error));
     QCOMPARE(snapshot.goxlrStatus, QStringLiteral("Unavailable"));
     QVERIFY(!snapshot.goxlrProviderActive);
+    QVERIFY(!snapshot.goxlrPresenceKnown);
     QVERIFY(snapshot.goxlrDevices.isEmpty());
     QByteArray goxlrInactive = goxlrUnavailable;
     goxlrInactive.replace("\"Unavailable\"", "\"Inactive\"");
@@ -629,6 +840,50 @@ private slots:
     QCOMPARE(snapshot.goxlrStatus, QStringLiteral("Failed"));
     goxlrFailed.replace("\"timeout\"", "\"adapter-unavailable\"");
     QVERIFY(!AudioContracts::decodeGoxlrStatus(goxlrFailed, &snapshot, &error));
+
+    QString goxlrCohort;
+    const QByteArray goxlrPlan = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-goxlr-control-plan/v1\","
+        "\"status\":\"Planned\",\"control\":\"fader-a-volume\","
+        "\"originalValue\":110,\"requestedValue\":123,\"cohort\":"
+        "\"0123456789abcdef\",\"requiresAcknowledgement\":"
+        "\"synapse-settings/audio-goxlr-popup/v1\",\"stateAuthority\":"
+        "\"provider-profile-model\",\"hardwareReadback\":false,"
+        "\"hardwareExactRollback\":false,\"applied\":false,"
+        "\"bounded\":true}\n");
+    QVERIFY(AudioContracts::decodeGoxlrControlPlan(
+        goxlrPlan, QStringLiteral("fader-a-volume"), 110, 123,
+        &goxlrCohort, &error));
+    QCOMPARE(goxlrCohort, QStringLiteral("0123456789abcdef"));
+    QByteArray falseGoxlrPlan = goxlrPlan;
+    falseGoxlrPlan.replace("0123456789abcdef", "0123456789abcdeg");
+    QVERIFY(!AudioContracts::decodeGoxlrControlPlan(
+        falseGoxlrPlan, QStringLiteral("fader-a-volume"), 110, 123,
+        &goxlrCohort, &error));
+
+    QString goxlrReceiptStatus;
+    int goxlrObserved = -1;
+    bool goxlrChanged = false;
+    bool goxlrRollbackAttempted = false;
+    bool goxlrRollbackSucceeded = false;
+    const QByteArray goxlrReceipt = QByteArrayLiteral(
+        "{\"schema\":\"synapse.settings.audio-goxlr-control-receipt/v1\","
+        "\"status\":\"Applied\",\"control\":\"fader-a-volume\","
+        "\"originalValue\":110,\"requestedValue\":123,"
+        "\"observedValue\":123,\"changed\":true,"
+        "\"rollbackAttempted\":false,\"rollbackSucceeded\":null,"
+        "\"stateAuthority\":\"provider-profile-model\","
+        "\"hardwareReadback\":false,\"hardwareExactRollback\":false,"
+        "\"playbackStarted\":false,\"captureStarted\":false,"
+        "\"bounded\":true}\n");
+    QVERIFY(AudioContracts::decodeGoxlrControlReceipt(
+        goxlrReceipt, QStringLiteral("fader-a-volume"), 110, 123,
+        &goxlrReceiptStatus, &goxlrObserved, &goxlrChanged,
+        &goxlrRollbackAttempted, &goxlrRollbackSucceeded, &error));
+    QCOMPARE(goxlrReceiptStatus, QStringLiteral("Applied"));
+    QCOMPARE(goxlrObserved, 123);
+    QVERIFY(goxlrChanged);
+    QVERIFY(!goxlrRollbackAttempted);
 
     bool changed = false;
     QString rule;
@@ -1643,6 +1898,9 @@ private slots:
     QCOMPARE(adapter.audioGoxlrStatus(), QStringLiteral("Ready"));
     QVERIFY(adapter.audioGoxlrReason().isEmpty());
     QVERIFY(adapter.audioGoxlrProviderActive());
+    QVERIFY(adapter.audioGoxlrPresenceKnown());
+    QVERIFY(adapter.audioGoxlrDevicePresent());
+    QVERIFY(adapter.audioGoxlrMutationAvailable());
     QVERIFY(!adapter.audioGoxlrTruncated());
     QCOMPARE(adapter.audioGoxlrDevices().size(), 1);
     QCOMPARE(adapter.audioGoxlrDevices()
@@ -1653,6 +1911,21 @@ private slots:
              QStringLiteral("GoXLR Mini"));
     QVERIFY(!adapter.audioGoxlrDevices().constFirst().toMap().contains(
         QStringLiteral("id")));
+    QVERIFY(adapter.setAudioGoxlrFaderVolume(0, 123));
+    QTRY_VERIFY_WITH_TIMEOUT(!adapter.audioBusy(), 10000);
+    QCOMPARE(adapter.audioStatusId(),
+             QStringLiteral("audio-goxlr-control-applied"));
+    QFile goxlrLogFile(fixture.goxlrLog());
+    QVERIFY(goxlrLogFile.open(QIODevice::ReadOnly));
+    const QByteArray goxlrLog = goxlrLogFile.readAll();
+    QCOMPARE(goxlrLog.count("plan-popup-control --control fader-a-volume "
+                            "--value 123 --format json"),
+             1);
+    QVERIFY(goxlrLog.contains(
+        "apply-popup-control --control fader-a-volume --value 123 --cohort "
+        "0123456789abcdef --ack synapse-goxlr/popup-control/v1 --format "
+        "json"));
+    QVERIFY(!goxlrLog.contains("synapse-settings/audio-goxlr-popup/v1"));
 
     const QString output = adapter.audioOutputs()
                                .at(1)
@@ -2247,6 +2520,72 @@ private slots:
     QCOMPARE(loaded.constFirst().constFirst().toBool(), false);
     QCOMPARE(adapter.audioErrorId(), QStringLiteral("output-too-large"));
     QVERIFY(!adapter.audioBusy());
+  }
+
+  void successfulLeaderCannotLeaveDescendants() {
+    QCOMPARE(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0), 0);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString backend = directory.filePath(QStringLiteral("successful-backend"));
+    const QString pidPath = directory.filePath(QStringLiteral("child-pid"));
+    const QByteArray script = QByteArrayLiteral(
+        "#!/usr/bin/python3\nimport os,time\nfrom pathlib import Path\n"
+        "child=os.fork()\nif child == 0:\n time.sleep(10)\n os._exit(0)\n"
+        "Path('") + pidPath.toUtf8() + QByteArrayLiteral(
+        "').write_text(str(child))\nprint('{}',flush=True)\n");
+    QVERIFY(writeFile(backend, script, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    AudioAdapter adapter(backend, [](const QString &) { return QString(); }, 3000);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    QVERIFY(adapter.loadAudio());
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 3000);
+    // The transport exits normally with status 0; {} is not an Audio contract.
+    QCOMPARE(adapter.audioErrorId(), QStringLiteral("contract-invalid"));
+    QFile pidFile(pidPath);
+    QVERIFY(pidFile.open(QIODevice::ReadOnly));
+    FixtureChild child;
+    child.pid = pidFile.readAll().toInt();
+    QVERIFY(child.pid > 1);
+    QTRY_VERIFY_WITH_TIMEOUT(child.reap(), 1500);
+    QVERIFY(WIFSIGNALED(child.status));
+    QCOMPARE(WTERMSIG(child.status), SIGKILL);
+    QTest::qWait(100);
+    QCOMPARE(loaded.size(), 1);
+  }
+
+  void commandEnvironmentIsAllowlisted() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString backend = directory.filePath(QStringLiteral("context-backend"));
+    const QString contextPath = directory.filePath(QStringLiteral("context.json"));
+    const QByteArray script = QByteArrayLiteral(
+        "#!/usr/bin/python3\nimport os,json\nfrom pathlib import Path\nPath('") +
+        contextPath.toUtf8() + QByteArrayLiteral(
+        "').write_text(json.dumps({'cwd':os.getcwd(),'env':dict(os.environ)}))\nprint('{}')\n");
+    QVERIFY(writeFile(backend, script, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    const auto oldAmbient = qgetenv("AUDIO_AMBIENT_CANARY");
+    const auto oldServer = qgetenv("PULSE_SERVER");
+    qputenv("AUDIO_AMBIENT_CANARY", "must-not-propagate");
+    qputenv("PULSE_SERVER", "unix:/fixture-only/pulse/native");
+    AudioAdapter adapter(backend, [](const QString &) { return QString(); }, 3000);
+    QSignalSpy loaded(&adapter, &AudioAdapter::audioLoaded);
+    const bool started = adapter.loadAudio();
+    // Construction snapshots the child environment; restore before assertions.
+    if (oldAmbient.isNull()) qunsetenv("AUDIO_AMBIENT_CANARY");
+    else qputenv("AUDIO_AMBIENT_CANARY", oldAmbient);
+    if (oldServer.isNull()) qunsetenv("PULSE_SERVER");
+    else qputenv("PULSE_SERVER", oldServer);
+    QVERIFY(started);
+    QTRY_COMPARE_WITH_TIMEOUT(loaded.size(), 1, 3000);
+    QFile contextFile(contextPath);
+    QVERIFY(contextFile.open(QIODevice::ReadOnly));
+    const auto context = QJsonDocument::fromJson(contextFile.readAll()).object();
+    const auto environment = context.value("env").toObject();
+    QVERIFY(!environment.contains("AUDIO_AMBIENT_CANARY"));
+    QVERIFY(!environment.contains("PATH"));
+    QVERIFY(!environment.contains("QT_QPA_PLATFORM"));
+    QCOMPARE(environment.value("PULSE_SERVER").toString(), QStringLiteral("unix:/fixture-only/pulse/native"));
+    QCOMPARE(environment.value("LC_ALL").toString(), QStringLiteral("C.UTF-8"));
+    QCOMPARE(context.value("cwd").toString(), QStringLiteral("/"));
   }
 
   void commandFailureKillsProcessGroup() {

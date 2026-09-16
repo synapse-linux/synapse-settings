@@ -29,7 +29,9 @@ UTF-8 round trip, completion, nesting and key-count boundaries.
 | `synapse.settings.audio-route-resolution/v1` | Deterministic per-executable resolution |
 | `synapse.settings.audio-route-broker-status/v1` | Read-only capability or active new-stream broker status |
 | `synapse.settings.audio-route-broker-receipt/v1` | Verified per-new-stream enforcement result |
-| `synapse.settings.audio-goxlr-status/v1` | Read-only redacted GoXLR provider presence and capability status |
+| `synapse.settings.audio-goxlr-status/v2` | Read-only redacted GoXLR provider/presence and popup presentation state |
+| `synapse.settings.audio-goxlr-control-plan/v1` | Read-only one-control GoXLR provider-model plan |
+| `synapse.settings.audio-goxlr-control-receipt/v1` | Verified, refused, drifted or compensated GoXLR provider-model result |
 
 The policy receipt distinguishes `policyApplied` from `routingApplied`. Alpha 8
 still sets the former true and the latter false because a policy write never
@@ -132,26 +134,57 @@ command success cannot claim routing. Both broker contracts fix
 `existingStreamMigration=false` and contain no PID, path, raw endpoint or event
 line.
 
-The GoXLR status contract has exactly thirteen top-level fields. `status` is
-`Ready`, `Inactive`, `Unavailable` or `Failed`; only Ready permits
-`providerActive=true`, a nonzero `deviceCount`, devices or truncation. Ready has
-`reason=null`. Non-Ready states expose no devices, and their reasons are bounded
-to adapter absence, provider inactivity, timeout, oversized response, invalid
-response or local status unavailability. The maximum count is eight and must
-match the device array. Each device contains only a redacted `goxlr-1` through
-`goxlr-8` token, model, reported system-output capability and
-`controlAvailable=false`. The contract always fixes
+The GoXLR status v2 contract has exactly fourteen top-level fields. `status` is
+`Ready`, `Inactive`, `Unavailable` or `Failed`. Only Ready permits
+`providerActive=true` or a device; Ready has `reason=null`, known presence and
+no more than one device. `presenceKnown` and `devicePresent` are independent
+from provider activity so an inactive provider may still report an attached
+GoXLR after a separate read-only inventory probe. Non-Ready states expose no
+control device. Reasons are bounded to adapter absence, provider inactivity,
+timeout, oversized response, invalid response or local status unavailability.
+
+A projected device has exactly `model`, `profileModelReady`,
+`systemOutputSupported`, `controlAvailable`, four ordered faders, cough and
+outputs. Each fader carries its letter, assigned channel, 0–255 volume,
+two-state mute and independent volume/mute availability. Cough carries
+`Toggle` or `Hold`, mute and availability; availability must be false for Hold.
+Outputs carry 0–255 headphones/Line Out values, a bounded monitored-output enum
+and independent availability. A capability can be true only for a profile-ready
+device. Top-level `mutationAvailable` is true exactly when at least one
+independent control is available. The contract always fixes
 `stateAuthority=provider-profile-model`, `hardwareReadback=false`,
-`hardwareExactRollback=false`, `mutationAvailable=false`, `readOnly=true` and
-`bounded=true`.
+`hardwareExactRollback=false`, `inspectionReadOnly=true` and `bounded=true`.
+Generation, provider token, profile name, serial, USB bus/address/path and raw
+routing never enter this projection.
 
 The C11 bridge accepts only the complete upstream
-`synapse.goxlr.provider-status/v2` contract and discards route, volume, fader,
-mute, mix and submix values after validation. The Qt adapter validates exact field sets, bounds, token forms, duplicate
-identities, direction/device/owner consistency, active-selection agreement and
-honest authority flags before publishing any projection. It strips the GoXLR
-device token before QML publication and never forwards profile/port cohorts or
-acknowledgements. It invokes only the C11
-`audio broker-status` and `audio goxlr-status` clients and never forwards raw
-contract objects, socket paths, provider profile values or transport text to
-QML.
+`synapse.goxlr.provider-status/v3` contract. It validates exact fields, source
+authority, one-device projection, generation, all eleven capability booleans,
+fader assignments, mute/cough/output values and complete system-output fields
+before discarding non-presentation state. If status is inactive or failed, it
+may separately accept only `synapse.goxlr.inventory/v1` from fixed
+`inventory --format json` argv to establish presence. Neither inspection starts
+the provider.
+
+The GoXLR control plan fixes `status=Planned`, one of eleven control IDs, exact
+integer original/requested values, one lowercase 16-hex cohort,
+`requiresAcknowledgement=synapse-settings/audio-goxlr-popup/v1`,
+`stateAuthority=provider-profile-model`, and `applied=false`. Volume values are
+0–255; mute values are 0 or 1. The cohort remains opaque to QML and binds the
+provider device, model, generation, control, assigned channel, value kind and
+exact values.
+
+The control receipt is `Applied`, `AlreadyApplied`, `Refused`, `Drifted`,
+`RolledBack` or `RollbackFailed`. It carries exact original, requested and fresh
+observed values, `changed`, provider-model compensation attempt/result and
+fixed no-readback/no-hardware-exact-rollback/no-playback/no-capture flags.
+`Applied` and `AlreadyApplied` are the only successful CLI exits. `RolledBack`
+means only verified provider-model restoration; it is not hardware restoration.
+`RollbackFailed` and `Drifted` remain uncertain. Cross-field invariants prevent
+refusal, drift or compensation from claiming a successful requested change.
+
+The Qt adapter validates exact field sets, bounds, status coherence,
+independent capability coherence and plan/receipt semantics before atomic
+publication. It never forwards profile/port or GoXLR cohorts,
+acknowledgements, provider IDs, generations, socket paths, raw contract objects
+or transport text to QML.

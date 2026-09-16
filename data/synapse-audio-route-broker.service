@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 [Unit]
 Description=Synapse Audio route broker for new application streams
 After=pipewire.service pipewire-pulse.service

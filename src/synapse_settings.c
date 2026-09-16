@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #define _POSIX_C_SOURCE 200809L
 
 #include <synapse/core.h>
@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "1.0.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "1.1.0-alpha.1"
 #endif
 
 typedef struct {
@@ -556,6 +556,8 @@ static void usage(FILE *out) {
           "  synapse-settings audio inventory [--format text|json]\n"
           "  synapse-settings audio broker-status [--format text|json]\n"
           "  synapse-settings audio goxlr-status [--format text|json]\n"
+          "  synapse-settings audio plan-goxlr-control --control CONTROL --value 0..255 [--format text|json]\n"
+          "  synapse-settings audio set-goxlr-control --control CONTROL --value 0..255 --original 0..255 --cohort ID --ack synapse-settings/audio-goxlr-popup/v1 [--format text|json]\n"
           "  synapse-settings audio plan-default --direction output|input --device ID [--format text|json]\n"
           "  synapse-settings audio set-default --direction output|input --device ID --ack synapse-settings/audio-default/v1 [--format text|json]\n"
           "  synapse-settings audio plan-volume --target ID --percent 0..100 [--format text|json]\n"

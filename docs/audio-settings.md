@@ -131,42 +131,14 @@ status after every apply result. QML presents explicit volume and mute dialogs
 for one published item and receives only the target token and bounded typed
 values. This source increment performed no live mutation, playback or capture.
 
-## Alpha 9 read-only GoXLR provider status
+## Alpha 9 historical read-only GoXLR boundary
 
-GoXLR presence is an observation capability, not hardware control.
-`synapse-settings audio goxlr-status` checks the fixed production executable
-`/usr/bin/synapse-goxlr` and, when present, invokes only
-`provider-status --format json`. It does not start the provider, initialize a
-device, apply a profile, route audio, play media or capture input. The outer
-process is bounded to three seconds and 65536 response bytes.
-
-C11 strictly decodes the complete `synapse.goxlr.provider-status/v2` object,
-including every nested system-output field, solely to prove the provider
-contract. Duplicate, missing, extra, malformed or out-of-range values, duplicate
-device IDs, unsupported models, count disagreement, oversized output and timeout
-all fail closed. Profile values are then discarded. The Settings-owned
-`synapse.settings.audio-goxlr-status/v1` projection carries only typed status,
-redacted device model and whether the provider reports system-output capability.
-It fixes `stateAuthority=provider-profile-model`, `hardwareReadback=false`,
-`hardwareExactRollback=false`, `mutationAvailable=false` and `readOnly=true`.
-
-`Unavailable` means the adapter executable is absent; `Inactive` means the
-read-only command completed with a clean nonzero provider result; launch/setup
-failure, signal termination and unavailable status transport are typed
-`Failed/status-unavailable`. Other bounded inspection or contract failures are
-also `Failed`; `Ready` means only that the provider status contract was accepted.
-Ready does not mean hardware state was read back,
-a device is audible, a route was applied or rollback is exact. A Ready provider
-may validly report zero devices.
-
-The Qt adapter independently validates the exact Settings contract and adds this
-stage after inventory, policy and broker status. It publishes a QML projection
-containing status, a bounded reason, activity, truncation and device model plus
-reported capability. It removes even the provider's redacted device token and
-exposes no GoXLR plan/apply/control method. QML maps the typed state to localized
-text and explicitly states that it cannot start the provider or mutate hardware.
-All provider responses in this increment came from compile-time fixture paths;
-no live provider or hardware was queried.
+Alpha 9 established the fixed-path, bounded and non-activating GoXLR inspection
+boundary. Its provider and Settings contract revisions were retired rather than
+accepted as alternate production inputs when Alpha 11 added typed popup state.
+The current bridge accepts only the Alpha 11 contracts described below. The
+original distinction remains: accepted provider status is not USB presence,
+hardware readback, routing proof, audibility or physical qualification.
 
 ## Alpha 10 guarded card profiles and endpoint ports
 
@@ -253,6 +225,69 @@ invalid nonempty value clears the entire inventory. The Qt outer process remains
 bounded while applying transaction-specific deadlines for commands that can
 legitimately execute several sequential two-second capture cohorts.
 
+## Alpha 11 mediated GoXLR popup controls
+
+`audio goxlr-status` accepts only the complete
+`synapse.goxlr.provider-status/v3` object from fixed
+`/usr/bin/synapse-goxlr provider-status --format json`. C11 requires one active
+provider, no truncation, at most one device, the fixed redacted provider token,
+a supported model, nonzero generation for a ready profile model, all four
+faders, two-state mute values, cough mode, output values, system-output state,
+eleven explicit capability booleans and conservative authority flags. Unknown,
+duplicate, missing, inconsistent or out-of-range fields fail closed. The
+Settings projection is `synapse.settings.audio-goxlr-status/v2`; it removes the
+provider token, generation, routing details and profile identity while retaining
+only typed presentation state and independent capabilities.
+
+Provider activity and USB presence are separate. When provider status is
+inactive or fails, Settings may run one separately bounded fixed
+`inventory --format json` probe. That probe can set `presenceKnown` and
+`devicePresent`; it cannot set `providerActive`, publish controls or start the
+provider. Opening Settings, opening the popup and refreshing either surface
+therefore never create the provider socket or run `provider-serve`.
+
+A popup control is available only for `Ready`, `providerActive=true`, exactly
+one profile-ready device, global mutation availability and its matching
+independent capability. The fixed controls are four fader volumes, four fader
+mutes, cough mute, headphones volume and Line Out volume. Mute is deliberately
+two-state (`Unmuted` or `MutedToAll`), and cough mutation is available only for
+`Toggle` mode.
+
+`plan-goxlr-control` is read-only. It accepts one fixed control and a canonical
+integer value, invokes the provider plan command with fixed argv, and strictly
+translates the complete provider plan to
+`synapse.settings.audio-goxlr-control-plan/v1`. Apply requires the exact
+original, requested value, 16-character cohort and
+`synapse-settings/audio-goxlr-popup/v1`. C11 translates that acknowledgement to
+`synapse-goxlr/popup-control/v1`; QML never receives either value. The provider
+recreates the plan from fresh state, performs the second preflight, invokes at
+most one setter, observes fresh state and persists its model before returning a
+receipt.
+
+The Settings receipt is
+`synapse.settings.audio-goxlr-control-receipt/v1`. `Applied` and
+`AlreadyApplied` are successful provider-model outcomes. `Refused`, `Drifted`,
+`RolledBack` and `RollbackFailed` remain explicit non-success outcomes. A
+compensation is provider-model-only, is attempted only while a fresh observation
+still equals the requested value, and never proves hardware restoration. No
+uncertain write is retried and an external restoration or third value is never
+overwritten. Every contract fixes hardware readback, hardware-exact rollback,
+playback and capture false.
+
+The Qt adapter independently decodes status, plan and receipt contracts,
+serializes one operation, refreshes the full base/profile-port/policy/broker/GoXLR
+cohort after every result. Explicit adapter deactivation and final adapter
+destruction retain their cancellation semantics; hiding or destroying an
+`AudioPopupHost` projection does not cancel the engine-owned singleton or clear
+its snapshot. The popup reuses existing snapshots and gates explicit refresh and
+commands while busy or shared choices are pending. See the separate
+[presentation lifetime contract](audio-surface.md). `AudioPopupHost` exposes only
+typed fields and methods. Its fixed complete-application launcher is
+`/usr/bin/synapse-goxlr gui`; executable selection and process launch remain in
+C++, not QML. All Alpha 11 mutations and lifecycle tests use compile-time
+fixtures. No provider was activated and no live USB, playback or capture state
+was changed.
+
 ## Application identity
 
 A durable “single process” selection is stored as the canonical executable
@@ -301,13 +336,13 @@ its production constructor uses only `/usr/bin/synapse-settings`. The module's
 typed reason/status/error properties while rendering the same
 `AudioSettings.qml` presentation.
 
-The shell controls one explicit `active` property. In Alpha 10, activating the
+The shell controls one explicit `active` property. In Alpha 11, activating the
 module starts only the established read-only base inventory, profile/port
-inventory, policy view, broker-status and GoXLR-status cohort.
-Mutations remain behind the same visible confirmations and adapter-owned plan,
+inventory, policy view, broker status and GoXLR status/presence cohort. Mutations
+remain behind visible user controls and adapter-owned planning,
 acknowledgement, receipt validation and complete refresh. Neither loading the
 module nor selecting the Audio section changes a default, policy, stream,
-profile, service or package state.
+profile, provider, service or package state.
 
 Executable and directory selection remains a native adapter responsibility. A
 shell must opt into `QApplication`; otherwise the chooser fails with
@@ -315,18 +350,19 @@ shell must opt into `QApplication`; otherwise the chooser fails with
 separate plugin with the fixture backend override. The production plugin has no
 test-backend literal or environment hook.
 
-The module embeds provisional `en_US` and `it_IT` catalogues. Unsupported or
-malformed locale requests fall back to `en_US`; the remaining pinned GUI
-catalogues are still required before localization can be called complete.
-Installation, shell deployment, package promotion and live Audio qualification
-remain separate gates.
+The module embeds all 64 pinned GUI catalogues. `en_US` and `it_IT` are complete
+for the Alpha 11 source inventory; the other 62 are explicit unfinished
+source-English fallbacks. Unsupported or malformed locale requests fall back to
+`en_US`, and Arabic, Persian and Hebrew project RTL layout independently of
+translation completeness. Installation, shell deployment, package promotion
+and live Audio qualification remain separate gates.
 
 ## Remaining Audio work
 
-Balance, level metering, safe playback tests, Bluetooth state, hotplug and
-GoXLR hardware control remain separate capabilities. Alpha 10 profile/port
-selection, Alpha 9 presence/status observation and Alpha 8 volume/mute authority
-never imply any of them. A safe sample never authorizes capture, profile import
-or GoXLR firmware/mixer mutation.
-The existing Quickshell `AudioPanel.qml` direct mutation model must not be reused
-inside Settings.
+Balance, level metering, safe playback tests, Bluetooth state, automatic GoXLR
+recovery and unmediated microphone processing, routing, lighting, sampler,
+effects, profile-management and firmware surfaces remain separate capabilities.
+Alpha 11 popup controls, Alpha 10 profile/port selection and Alpha 8 generic
+volume/mute authority never imply any of them. A safe sample never authorizes
+capture, profile import or GoXLR firmware mutation. Direct PipeWire or provider
+mutation must not be reintroduced into QML.

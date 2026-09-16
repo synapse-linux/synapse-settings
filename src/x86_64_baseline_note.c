@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 
 #if defined(__x86_64__)
 // Publish explicit GNU_PROPERTY_X86_ISA_1_NEEDED and ISA_1_USED baseline

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #ifndef SYNAPSE_SETTINGS_INTERNAL_H
 #define SYNAPSE_SETTINGS_INTERNAL_H
 
@@ -17,6 +17,7 @@
 int settings_audio_command(int argc, char **argv);
 #ifdef SYNAPSE_SETTINGS_WITH_GOXLR_STATUS
 int settings_audio_goxlr_status_command(int argc, char **argv);
+int settings_audio_goxlr_control_command(int argc, char **argv);
 #endif
 int settings_audio_route_command(int argc, char **argv);
 int settings_audio_policy_target(const char *direction, const char *requested,

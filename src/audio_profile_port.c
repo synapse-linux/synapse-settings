@@ -1,5 +1,17 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Included by audio.c after the private Audio inventory and stream definitions.
+// SPDX-License-Identifier: MIT
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+#include "audio_private.h"
+
+#include <errno.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef SYNAPSE_SETTINGS_WITH_PROFILE_PORT
+#error "Profile/port unit requires SYNAPSE_SETTINGS_WITH_PROFILE_PORT"
+#endif
 
 #define AUDIO_SELECTION_ACK "synapse-settings/audio-profile-port/v1"
 #define AUDIO_SELECTION_RAW_LIMIT 255U
@@ -135,7 +147,8 @@ static int audio_selection_copy_label_from_object(json_object *object,
       object, "description", AUDIO_LABEL_LIMIT, &valid);
   if (!valid)
     return -1;
-  return copy_label(target, target_size, description ? description : fallback);
+  return audio_copy_label(target, target_size,
+                          description ? description : fallback);
 }
 
 static int audio_selection_option_token(audio_selection_kind kind,
@@ -361,12 +374,12 @@ audio_selection_finalize_active(audio_selection_kind kind, json_object *object,
     audio_selection_option *option = &pool[target->option_offset + index];
     if (strcmp(option->raw_name, active) != 0)
       continue;
-    if (copy_bounded(target->active_selection, sizeof(target->active_selection),
-                     option->id) != 0 ||
+    if (audio_copy_bounded(target->active_selection,
+                           sizeof(target->active_selection), option->id) != 0 ||
         audio_selection_copy_raw(target->active_raw, sizeof(target->active_raw),
                                  option->raw_name) != 0 ||
-        copy_label(target->active_label, sizeof(target->active_label),
-                   option->label) != 0)
+        audio_copy_label(target->active_label, sizeof(target->active_label),
+                         option->label) != 0)
       return -1;
     target->active_found = 1;
     return 0;
@@ -432,7 +445,7 @@ static int audio_selection_parse_target_array(
         audio_selection_copy_label_from_object(object, "", parsed_target.label,
                                                sizeof(parsed_target.label)) !=
             0 ||
-        copy_bounded(
+        audio_copy_bounded(
             parsed_target.target_type, sizeof(parsed_target.target_type),
             kind == AUDIO_SELECTION_PROFILE ? "card" : direction) != 0 ||
         audio_selection_target_token(kind, direction, raw_name,
@@ -451,8 +464,9 @@ static int audio_selection_parse_target_array(
     if (audio_selection_copy_raw(seen_raw_names[seen_identity_count],
                                  sizeof(seen_raw_names[0]),
                                  parsed_target.raw_name) != 0 ||
-        copy_bounded(seen_target_tokens[seen_identity_count],
-                     sizeof(seen_target_tokens[0]), parsed_target.target) != 0)
+        audio_copy_bounded(seen_target_tokens[seen_identity_count],
+                           sizeof(seen_target_tokens[0]),
+                           parsed_target.target) != 0)
       return -1;
     seen_identity_count++;
     if (is_monitor)
@@ -479,7 +493,7 @@ static int audio_selection_load_json(audio_selection_kind kind,
                          : strcmp(direction, "output") == 0 ? "sinks"
                                                             : "sources";
   json_object *array =
-      pactl_json(pactl_binary(), "list", category, NULL, reason);
+      audio_pactl_json(audio_pactl_binary(), "list", category, NULL, reason);
   if (!array)
     return -1;
   int status =
@@ -644,10 +658,9 @@ static void print_audio_profile_port_inventory_text(
          inventory->output_count + inventory->input_count);
 }
 
-static int settings_audio_profile_port_inventory_command(int argc,
-                                                         char **argv) {
+int settings_audio_profile_port_inventory_command(int argc, char **argv) {
   const char *format = NULL;
-  if (parse_format(argc, argv, 2, &format) != 0) {
+  if (audio_parse_format(argc, argv, 2, &format) != 0) {
     audio_usage(stderr);
     return 2;
   }
@@ -738,12 +751,14 @@ load_audio_selection_state(audio_selection_kind kind, const char *target_token,
   audio_selection_option *requested =
       audio_selection_find_option(inventory, target, kind, requested_token);
   if (!active ||
-      copy_bounded(state->target, sizeof(state->target), target->target) != 0 ||
-      copy_bounded(state->target_type, sizeof(state->target_type),
-                   target->target_type) != 0 ||
+      audio_copy_bounded(state->target, sizeof(state->target),
+                         target->target) != 0 ||
+      audio_copy_bounded(state->target_type, sizeof(state->target_type),
+                         target->target_type) != 0 ||
       audio_selection_copy_raw(state->raw_name, sizeof(state->raw_name),
                                target->raw_name) != 0 ||
-      copy_label(state->label, sizeof(state->label), target->label) != 0) {
+      audio_copy_label(state->label, sizeof(state->label), target->label) !=
+          0) {
     free(inventory);
     *reason = "audio-unavailable";
     return -1;
@@ -826,7 +841,7 @@ static int audio_selection_target_shape(audio_selection_kind kind,
   if (kind == AUDIO_SELECTION_PROFILE)
     return target_type && strcmp(target_type, "card") == 0 &&
            audio_selection_hex_token(target, "card-");
-  return endpoint_token_shape(target_type, target);
+  return audio_endpoint_token_shape(target_type, target);
 }
 
 static int audio_selection_option_shape(audio_selection_kind kind,
@@ -908,15 +923,16 @@ static int initialize_audio_selection_receipt(audio_selection_receipt *receipt,
                                               const char *requested_selection) {
   memset(receipt, 0, sizeof(*receipt));
   receipt->selection = audio_selection_name(kind);
-  if (copy_bounded(receipt->target, sizeof(receipt->target), target) != 0 ||
-      copy_bounded(receipt->target_type, sizeof(receipt->target_type),
-                   target_type) != 0 ||
-      copy_bounded(receipt->original_selection,
-                   sizeof(receipt->original_selection),
-                   original_selection) != 0 ||
-      copy_bounded(receipt->requested_selection,
-                   sizeof(receipt->requested_selection),
-                   requested_selection) != 0)
+  if (audio_copy_bounded(receipt->target, sizeof(receipt->target), target) !=
+          0 ||
+      audio_copy_bounded(receipt->target_type, sizeof(receipt->target_type),
+                         target_type) != 0 ||
+      audio_copy_bounded(receipt->original_selection,
+                         sizeof(receipt->original_selection),
+                         original_selection) != 0 ||
+      audio_copy_bounded(receipt->requested_selection,
+                         sizeof(receipt->requested_selection),
+                         requested_selection) != 0)
     return -1;
   return 0;
 }
@@ -924,9 +940,9 @@ static int initialize_audio_selection_receipt(audio_selection_receipt *receipt,
 static void audio_selection_receipt_status(audio_selection_receipt *receipt,
                                            const char *status,
                                            const char *reason) {
-  (void)copy_bounded(receipt->status, sizeof(receipt->status), status);
-  (void)copy_bounded(receipt->reason, sizeof(receipt->reason),
-                     reason ? reason : "");
+  (void)audio_copy_bounded(receipt->status, sizeof(receipt->status), status);
+  (void)audio_copy_bounded(receipt->reason, sizeof(receipt->reason),
+                           reason ? reason : "");
 }
 
 static void
@@ -1009,12 +1025,12 @@ static int execute_audio_selection(const audio_selection_state *state,
     operation = "set-sink-port";
   else
     operation = "set-source-port";
-  char *argv[5] = {(char *)pactl_binary(), (char *)operation,
+  char *argv[5] = {(char *)audio_pactl_binary(), (char *)operation,
                    (char *)state->raw_name, (char *)selection->raw_name, NULL};
-  capture_result result = capture_command(argv);
+  audio_capture_result result = audio_capture_command(argv);
   *timed_out = result.timed_out;
   int status = result.data && !result.too_large && result.status == 0 ? 0 : -1;
-  capture_free(&result);
+  audio_capture_free(&result);
   return status;
 }
 
@@ -1253,7 +1269,7 @@ static int parse_audio_selection_options(
   return 0;
 }
 
-static int settings_audio_selection_command(int argc, char **argv) {
+int settings_audio_selection_command(int argc, char **argv) {
   int profile = strcmp(argv[1], "plan-profile") == 0 ||
                 strcmp(argv[1], "set-profile") == 0;
   int apply =

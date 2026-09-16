@@ -1,11 +1,12 @@
+<!-- SPDX-License-Identifier: MIT -->
 # Architecture
 
 ## Layers
 
 1. `synapse-settings` C11 core owns inventory, validation, canonicalization,
    policy persistence, precedence, guarded default-device, level-control,
-   card-profile and endpoint-port operations, and the read-only GoXLR status
-   bridge.
+   card-profile and endpoint-port operations, plus read-only GoXLR inspection
+   and separately acknowledged popup-control mediation.
 2. `AudioAdapter` is a thin Qt/C++ boundary. It owns bounded asynchronous core
    execution, strict contract decoding, native path choosers and publication of
    bounded presentation projections.
@@ -26,6 +27,103 @@ The standalone GUI is also a portability boundary: feature QML imports Qt Quick
 rather than Quickshell modules. The same QML and adapter can therefore be hosted
 by a Synapse shell without changing the Audio contracts.
 
+## Private C Audio composition
+
+`audio.c` owns the base inventory, opaque endpoint/card identities, process
+inspection, stream snapshots, strict bounded JSON acquisition and the existing
+finite command runner. `audio_control.c` owns volume/mute option parsing,
+cohorts, plans, receipts, setters and compensation. `audio_profile_port.c` owns
+the separate profile/port inventory, choice parsing, owner-scoped tokens,
+transaction cohorts, plans, receipts and compensation. These are independent C11
+translation units, not source fragments included by the inventory implementation.
+The finite C runner terminates its complete owned process group even after a
+successful leader exit; a successful CLI child cannot leave detached work in
+that group. A separately owned descendant fixture tests this cleanup contract.
+
+The noninstalled `src/audio_private.h` is limited to shared bounds, existing
+validation/hash/acquisition helpers, value snapshots and family dispatch entry
+points. Full base-inventory arrays and process inspection remain private to
+`audio.c`. Control target classification, snapshot acquisition and identity
+comparison also stay there; transaction code borrows no inventory pointers.
+Returned capture buffers and JSON objects have explicit caller-owned release
+rules. A snapshot, parsed value or successful subprocess exit is not mutation
+permission or a verified transaction result.
+
+No callback registry, generic transaction engine or new public API is introduced.
+Both transaction families retain their distinct preflight, postflight, failure
+reason ordering and compensation rules. The profile/port unit requires
+`SYNAPSE_SETTINGS_WITH_PROFILE_PORT` and is absent from broker source/link inputs;
+it cannot silently add that capability to the new-stream broker. Executable and
+option-alias overrides remain compile-time-only fixture hooks. Qt, QML, schemas,
+acknowledgements and normal CLI output are unchanged.
+
+`make test-audio-units` runs a separately compiled private-helper probe and a
+fixed fake-pactl corpus for endpoint volume/mute, card profiles and input/output
+ports. The corpus checks refusal, double preflight, no-op, postflight and guarded
+compensation behavior and records every fixture request. Existing stream,
+policy, broker and malformed-input tests remain separate and unchanged.
+`AUDIO_UNITS_OUTPUT_DIR` must be a new absolute directory when captures are
+requested; `AUDIO_UNITS_EXPECTED` optionally compares exact command results and
+request traces with an already frozen corpus. Neither test facility is installed
+or linked into production.
+
+## Private Qt implementation boundaries
+
+`audio_contracts_p.h` / `audio_contracts.cpp` contain bounded presentation DTOs,
+family-specific decoders and semantic validation of opaque identities. Raw token
+patterns remain private; QML receives no validators or transport authority.
+`audio_command_p.h` / `audio_command.cpp` implement the finite asynchronous
+command runner. The runner uses null stdin/stderr, working directory `/`, a
+necessary allowlisted session/server environment, parent-death handling and
+whole-group cleanup before callback publication, even after a successful leader
+exit.
+
+`audio_adapter.cpp` retains fixed executable discovery, native choosers,
+single-flight family coordination and guarded atomic snapshot publication.
+Cancellation, teardown and reentrant signals remain coordinator concerns. The
+standalone application and Audio plugin compile these repository-local private
+modules directly; neither an installed C++ library nor a generic transaction
+framework is introduced. Application/window activation and persistent provider
+lifetimes remain outside the finite runner.
+
+Standalone fixture smoke uses the separately compiled
+`synapse-settings-gui-test`; production builds do not propagate fixture backend
+or staged-library environment overrides. The smoke harness rejects a production
+GUI before launch and guards its fixture entry point against falling back to
+host Audio tools when required fixture paths are missing.
+
+## Presentation and theme boundary
+
+`QQuickStyle::Basic` remains the deterministic Qt Controls substrate. It is not
+the product theme: Synapse-owned `AudioCard`, `AudioButton`, `AudioSlider`,
+`AudioComboBox` and `AudioSectionHeading` components define the visible Audio
+surface above it. Primary and secondary foregrounds are derived against their
+actual surfaces, and disabled or busy controls retain readable presentation.
+The scrollable content keeps all output, input, stream, routing, profile, port
+and GoXLR sections discoverable without moving transaction authority into QML.
+
+`AudioSettingsSection` remains host-neutral. `AudioSettings` and
+`AudioShellHost` forward typed background, surface, hover, border, accent, text,
+muted, urgent, font, radius and spacing properties. A shell injects its own
+trusted palette through those values; feature QML imports no shell singleton
+and resolves no provider executable.
+
+The standalone host owns `SettingsTheme`, a strict
+`synapse.theme.current/v3` projection. It discovers only a trusted sibling
+`synapse-theme`, `/usr/bin/synapse-theme`, or the fixed compatibility path
+`/usr/local/bin/synapse-theme`, in that order. It performs no `PATH` lookup,
+rejects unsafe executable or directory ownership/modes, invokes only
+`current --format json` with a bounded environment, output and deadline, and
+rejects responses over 16 KiB, duplicate decoded object keys, unsafe theme
+identifiers, malformed contracts and providers exceeding the 1.2-second
+deadline. The provider has null stdin, an isolated process group and a
+parent-death kill signal; overflow and timeout kill the complete group. The
+adapter retains the last valid palette after failed reloads. Fixed theme
+configuration/state paths are watched so property notifications repaint the
+existing QML object tree without recreating the Audio backend or controls.
+Accent foregrounds are selected with WCAG relative luminance rather than an
+unadjusted RGB threshold.
+
 ## Reusable QML module boundary
 
 Alpha 7 packages `AudioSettings.qml`, `AudioSettingsSection.qml` and
@@ -42,19 +140,23 @@ startup property so needed and used remain exactly baseline without using the
 rejected linker `-z x86-64-baseline` path. The production ELF boundary test
 checks all four installed artifacts.
 
-`AudioShellHost` exposes readiness, availability, busy state, broker activity,
-enforcement availability, read-only GoXLR status/activity/count/truncation and
-bounded status/reason/error identifiers. It does not expose models containing
-private process or provider data, the backend executable path,
+`AudioShellHost` and the lazy `AudioPopupHost` expose readiness, availability,
+busy state, broker activity, enforcement availability, typed GoXLR
+status/presence, four faders, cough, outputs, independent capabilities and
+bounded status/reason/error identifiers. They do not expose private process or
+provider data, the backend executable path,
 raw JSON, PipeWire names, acknowledgements, cohorts, argv, environment or IPC
 frames. The existing feature QML receives the same typed adapter as the
 standalone application and remains free of Quickshell imports.
 
-The host sets an explicit `active` boolean. Activation lazily creates the Audio
-section and starts the read-only base-inventory-profile/port-inventory-policy-
-broker-status-GoXLR-status load. Hiding the
-section releases its presentation objects without adding ambient mutation or
-reconciliation; the typed singleton remains single-flight. A host that offers
+Each host sets an explicit `active` boolean. Activation lazily starts the
+read-only base-inventory-profile/port-inventory-policy-broker-status-GoXLR-status
+load. Settings navigation now retains instantiated content on hiding and exposes
+versioned hide/unload queries; see [Audio surface](audio-surface.md) for the local
+integration revision and its explicit mixed-host/outer-loader limitations.
+Explicit adapter deactivation still cancels work, clears pending choices and
+clears the snapshot; the predecessor `AudioPopupHost` retains that behavior and
+has not been migrated here. The typed singleton remains single-flight. A host that offers
 native executable/directory dialogs must run as `QApplication`. If it does not,
 the adapter returns the typed `native-dialog-unavailable` presentation error
 without invoking a backend operation.
@@ -83,7 +185,7 @@ Every JSON object is decoded into an exact expected field set. Arrays, text,
 identities and integer ranges are bounded; duplicate endpoint, stream, card,
 profile, port and rule identities fail closed. Models publish only after base
 inventory, the separately decoded profile/port inventory, route policy, broker
-runtime status and read-only GoXLR status all pass validation. Profile/port
+runtime status and typed GoXLR status/presence all pass validation. Profile/port
 active selections and target labels must also agree with the accepted base
 inventory before publication.
 
@@ -152,6 +254,23 @@ A GUI profile or port transaction is a third independent family:
 The acknowledgement, cohort, raw target and choice names, backend index and
 setter argv never enter QML. Opening or cancelling confirmation performs no
 mutation.
+
+A GUI GoXLR popup transaction is a fourth independent family:
+
+1. require Ready, an active provider, exactly one profile-ready typed device,
+   global mutation availability and the selected control's capability;
+2. request and independently validate a fresh plan for one of eleven fixed
+   controls and retain its original value and 16-hex cohort inside the adapter;
+3. invoke acknowledged apply with the exact original/requested pair and cohort;
+4. independently validate the complete applied, unchanged, refused, drifted or
+   provider-model compensation receipt;
+5. reload the complete Audio cohort after every result, malformed response or
+   transport failure.
+
+The lazy popup sends only a control-specific typed method call. It receives no
+provider identity, generation, cohort, acknowledgement, receipt, command or
+process metadata. Destroying the popup deactivates the adapter and cancels its
+pending plan/apply path.
 
 ## Guarded profile and port transaction boundary
 
@@ -242,34 +361,60 @@ separate authorities.
 This capability was qualified only with compile-time fixture overrides. It did
 not change a live device or stream and did not start playback or capture.
 
-## Read-only GoXLR status bridge
+## Mediated GoXLR status and popup-control bridge
 
 The Settings-only C11 bridge checks the fixed production
-`/usr/bin/synapse-goxlr` executable and invokes exactly
-`provider-status --format json` with no shell. Its isolated child process group,
-parent-death `SIGKILL`, null input/error streams, monotonic deadline and output
-capture limit execution to three seconds and 65536 bytes. Child descriptor setup
-also remains valid when Settings inherited closed standard descriptors, and a
-non-successful provider exit terminates the whole child group. A close-on-exec
-child-report channel unambiguously separates setup or `exec` failure from every clean provider
-nonzero exit, including 126 and 127. The test path override is compiled only
-into the fixture Settings binary; the production Audio broker neither links the
-bridge nor contains its path or hook.
+`/usr/bin/synapse-goxlr` executable and invokes fixed commands with no shell.
+Status, plan and presence work is bounded to three seconds; apply is bounded to
+twelve seconds; every response is capped at 65536 bytes. Each child has an
+isolated process group, parent-death `SIGKILL`, null input/error streams and a
+monotonic deadline. Descriptor setup remains valid with closed inherited
+standard descriptors, and whole-process-group termination covers setup,
+timeout, capture and non-success paths. A close-on-exec report channel separates
+setup or `exec` failure from clean child exits. The executable override is
+compiled only into the fixture Settings binary; the production Audio broker
+neither links this bridge nor contains its path or hook.
 
-The parser accepts one canonical provider-status v2 object, exact nested field
-sets, at most eight unique redacted device IDs, fixed source authority, bounded
-models and complete profile-value types. It rejects duplicate keys and
-identities before emitting anything. Route, volume, fader, mute, mix and submix
-values are validated and immediately discarded. The Settings v1 projection
-retains only status, model and reported system-output capability and fixes every
-control, hardware-readback and hardware-exact-rollback claim false.
+Status invokes exactly `provider-status --format json` and accepts only
+`synapse.goxlr.provider-status/v3`. The C11 bounded parser requires exact
+nested fields, no truncation, at most one device, fixed source authority,
+supported model, coherent generation/profile readiness, all four faders,
+two-state mute, cough and output state, all eleven independent capability
+booleans and complete system-output state. It rejects duplicate, missing,
+unknown, malformed or incoherent values before emitting anything. The Settings
+v2 projection strips the provider ID, generation, profile identity and routing
+state while retaining typed popup values and independent capability gates.
 
-The Qt adapter repeats exact contract and cross-field validation. Before
-publication it sorts devices deterministically and strips their redacted IDs, so
-QML receives only model and reported capability. QML exposes no provider
-command, profile field, acknowledgement, plan or apply method. Loading cannot
-start the provider or change hardware, and Ready is never interpreted as
-hardware readback or physical qualification.
+Provider activity and USB presence remain separate. After inactive or failed
+status only, C11 may invoke exactly `inventory --format json` and validate its
+complete bounded device inventory. This read-only probe sets only
+`presenceKnown` and `devicePresent`; it cannot publish controls or start the
+provider. Opening or refreshing Settings and the popup therefore never invokes
+`provider-serve`.
+
+Planning accepts one of eleven compile-time control IDs and a canonical bounded
+integer. C11 invokes fixed `plan-popup-control` argv, strictly validates the
+provider plan, and translates it to a Settings plan with a private cohort. Apply
+requires the exact original/requested pair, cohort and
+`synapse-settings/audio-goxlr-popup/v1`; only C11 translates that acknowledgement
+to `synapse-goxlr/popup-control/v1` and invokes fixed `apply-popup-control` argv.
+The provider recreates the plan against fresh state, performs the second
+preflight, issues no more than one setter, observes fresh state and persists its
+model before producing a receipt. Settings strictly translates applied,
+already-applied, refused, drifted, compensated and rollback-failed outcomes.
+Compensation has provider-model-only authority, never proves hardware
+restoration, is not attempted over an external restoration or third state, and
+an uncertain write is never retried.
+
+The Qt adapter repeats exact status, plan and receipt validation, owns the
+serialized plan/apply sequence and refreshes the full Audio cohort after every
+outcome. `AudioPopupHost` exists only while its host is active; deactivation or
+destruction terminates pending work, clears choices and clears its snapshot.
+QML receives bounded typed values, booleans and methods only—never JSON,
+provider IDs, generations, cohorts, acknowledgements, argv, executable paths or
+transport state. C++ alone launches the fixed `/usr/bin/synapse-goxlr gui`
+application. Loading, refreshing and launching the UI do not imply provider
+activity, hardware readback, audibility or physical qualification.
 
 ## PipeWire-Pulse core adapter
 

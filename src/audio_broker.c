@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #define _POSIX_C_SOURCE 200809L
 
 #include "settings_internal.h"
@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 #ifndef SYNAPSE_SETTINGS_VERSION
-#define SYNAPSE_SETTINGS_VERSION "1.0.0-alpha.1"
+#define SYNAPSE_SETTINGS_VERSION "1.1.0-alpha.1"
 #endif
 
 #define BROKER_STREAM_LIMIT SETTINGS_AUDIO_BROKER_STREAM_LIMIT

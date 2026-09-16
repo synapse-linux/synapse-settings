@@ -1,13 +1,19 @@
 # Synapse Settings
 
+License: MIT. See [`docs/LICENSE-AUTHORITY.md`](docs/LICENSE-AUTHORITY.md) for first-party provenance and separate dependency obligations.
+
 CLI-first C11 settings backend, a lazy Qt Quick presentation, and a separate C11
-new-stream Audio route broker. Alpha 10 adds bounded, separately planned and
-acknowledged card-profile and endpoint-port selection after the established
-inventory, policy, broker and read-only GoXLR capabilities. The
-`Synapse.Settings.Audio` module keeps PipeWire and provider authority, raw
-identities, private cohorts, acknowledgements and rollback in C11/Qt boundaries
-rather than QML. It exposes no GoXLR mutation operation and never represents a
-software or provider model as hardware readback. Installation, shell
+new-stream Audio route broker. Alpha 11 adds a Settings-owned GoXLR popup
+mediation boundary after the qualified Alpha 10 inventory, profile/port, policy
+and broker stages. The `Synapse.Settings.Audio` module keeps PipeWire and GoXLR
+provider authority, raw identities, generations, private cohorts,
+acknowledgements, receipts and compensation in C11/Qt boundaries rather than
+QML. It projects four assigned faders, their two-state mutes, cough mute,
+headphones and Line Out only when the exact independent capability is ready, and
+never represents provider-model state as hardware readback. The corrected
+presentation keeps `QQuickStyle::Basic` as its deterministic substrate while
+Synapse-owned controls, explicit host theme tokens and the standalone strict v3
+theme adapter provide the visible product surface. Installation, shell
 replacement, provider or broker activation, live mutation and physical
 qualification remain later deployment gates.
 
@@ -19,6 +25,8 @@ build/synapse-settings audio plan-profile --card CARD_ID --profile PROFILE_ID --
 build/synapse-settings audio plan-port --direction output --device OUTPUT_ID --port PORT_ID --format json
 build/synapse-settings audio broker-status --format json
 build/synapse-settings audio goxlr-status --format json
+build/synapse-settings audio plan-goxlr-control --control fader-a-volume --value 96 --format json
+build/synapse-settings audio set-goxlr-control --control fader-a-volume --value 96 --original 80 --cohort COHORT --ack synapse-settings/audio-goxlr-popup/v1 --format json
 build/synapse-settings audio plan-stream-move --stream PLAYBACK_ID --device OUTPUT_ID --format json
 build/synapse-settings audio plan-volume --target OUTPUT_ID --percent 40 --format json
 build/synapse-settings audio plan-mute --target PLAYBACK_ID --muted true --format json
@@ -60,7 +68,12 @@ Audio capabilities in this slice:
   the current system default;
 - native executable/directory chooser owned by the trusted Qt adapter;
 - lazy standalone QML host and reusable `Synapse.Settings.Audio` module with
-  all 64 pinned GUI locale catalogues, complete `en_US`/`it_IT` coverage,
+  Synapse-owned cards, buttons, sliders, combo boxes and section headings above
+  the deterministic Basic substrate;
+- explicit host-neutral theme tokens, WCAG-derived accent foregrounds, plus
+  trusted fixed-provider discovery and strict bounded live v3 theme reload in
+  standalone Settings without `PATH` lookup;
+- all 64 pinned GUI locale catalogues, complete `en_US`/`it_IT` coverage,
   explicit unfinished `en_US` fallback entries for the other 62 alpha
   catalogues, deterministic unknown-locale fallback and RTL layout projection;
 - a bounded broker for new playback and recording streams created after its
@@ -69,11 +82,20 @@ Audio capabilities in this slice:
   PipeWire endpoint;
 - owner-private, same-UID, bounded AF_UNIX status IPC with no mutation requests;
 - typed Active, Inactive and Unavailable broker presentation in Settings;
-- fixed-path, bounded GoXLR status inspection with typed Ready, Inactive,
-  Unavailable and Failed outcomes;
-- a redacted device projection limited to model and reported system-output
-  capability, with no provider startup, hardware controls, raw profile values or
-  hardware-readback claim;
+- fixed-path, bounded GoXLR provider-v3 inspection with typed Ready, Inactive,
+  Unavailable and Failed outcomes plus a separate read-only USB presence probe
+  when the provider is not active;
+- a single-device redacted projection of four assigned faders, independent
+  volume/mute capabilities, toggle-mode cough mute, headphones, Line Out and
+  reported system-output support, without identity or profile metadata;
+- separately planned GoXLR popup controls using the Settings acknowledgement
+  `synapse-settings/audio-goxlr-popup/v1`, provider cohort revalidation, one
+  setter, fresh observation, typed provider-model compensation and a complete
+  post-operation refresh;
+- a lazy `AudioPopupHost` that reuses the shared snapshot without cancelling
+  another surface's work on hide/destruction, interaction-aware host permission
+  queries, and a fixed `/usr/bin/synapse-goxlr gui` launcher owned by C++ rather
+  than QML;
 - a separate, one-stream existing-stream plan and exact-acknowledgement move with
   same-identity postflight and exact-original rollback when safe;
 - an explicit Qt confirmation surface that never creates a durable rule;
@@ -116,12 +138,16 @@ Settings obtains broker runtime state through
 `audio broker-status`, which sends one fixed read-only request to the broker's
 mode-0600 AF_UNIX socket in an owner-mode-0700 runtime directory. The C11 client
 rejects stale sockets, wrong ownership or modes, timeouts and noncanonical
-responses before the Qt adapter receives a typed contract. The independent
-`audio goxlr-status` bridge executes only `/usr/bin/synapse-goxlr` with fixed
-`provider-status --format json` arguments, bounds time and output, strictly
-decodes the provider v2 contract, strips all profile values, and emits a
-Settings-owned status contract. A missing adapter or inactive provider is
-ordinary typed state.
+responses before the Qt adapter receives a typed contract. The independent `audio goxlr-status` bridge executes only
+`/usr/bin/synapse-goxlr` with fixed `provider-status --format json` arguments,
+bounds time and output, strictly decodes the provider v3 contract and emits the
+Settings-owned `synapse.settings.audio-goxlr-status/v2` projection. When status
+is inactive or fails, a separate fixed `inventory --format json` call may
+establish read-only attached/absent presence; neither path starts the provider.
+`plan-goxlr-control` and `set-goxlr-control` translate the Settings acknowledgement
+to `synapse-goxlr/popup-control/v1` only inside C11, accept only one of eleven
+fixed controls, and strictly translate provider plans and receipts. A missing
+adapter or inactive provider remains ordinary typed state.
 
 Docker inventory from Alpha 1 remains optional and bounded. CLI and broker
 runtime dependencies are `libsynapse-core.so.0` and `json-c`; the optional GUI

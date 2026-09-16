@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 binary=${1:?binary required}
@@ -91,7 +91,7 @@ assert all(x['available'] and x['icon'] and x['lazy'] for x in value['sections']
 PY
 "$binary" sections --format text >"$work/sections.txt"
 grep -Fq $'audio\tAudio\taudio-card\tavailable' "$work/sections.txt"
-[[ $($binary --version) == 'synapse-settings 1.0.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-settings 1.1.0-alpha.1' ]]
 "$binary" --help >"$work/help.txt"
 grep -Fq 'synapse-settings audio policy set-rule' "$work/help.txt"
 grep -Fq 'synapse-settings audio plan-volume' "$work/help.txt"
@@ -1440,6 +1440,24 @@ for validator,value in invalid:
  assert list(validator.iter_errors(value)), value
 print(f'schema validations: {len(pairs)+1}')
 print(f'schema rejection validations: {len(invalid)}')
+PY
+
+# First-party Settings source remains aligned with the workspace MIT policy.
+python - "$root" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+assert (root / 'LICENSE').read_text().startswith('MIT License\n')
+suffixes = {'.c', '.h', '.cpp', '.qml', '.py', '.sh', '.ld', '.inc'}
+for path in root.rglob('*'):
+    if (not path.is_file() or '.git' in path.parts or '.work' in path.parts
+            or any(part.startswith('build') for part in path.parts)):
+        continue
+    if path.name == 'Makefile' or path.suffix in suffixes:
+        text = path.read_text(errors='replace')
+        head = '\n'.join(text.splitlines()[:3])
+        assert 'SPDX-License-Identifier: MIT' in head, path
+        assert ('GPL-' + '3.0-or-later') not in text, path
 PY
 
 bash -n "$root/tests/run.sh"

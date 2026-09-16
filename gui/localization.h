@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #ifndef SYNAPSE_SETTINGS_GUI_LOCALIZATION_H
 #define SYNAPSE_SETTINGS_GUI_LOCALIZATION_H
 

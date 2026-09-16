@@ -1,15 +1,156 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
-Item {
+Control {
     id: root
+    objectName: "audioSettingsPresentation"
 
     required property var backend
+    property color backgroundColor: "#10151f"
+    property color surfaceColor: "#171f2c"
+    property color surfaceHoverColor: "#27364a"
+    property color borderColor: "#354760"
+    property color accentColor: "#7aa2f7"
+    property color textColor: "#e7eefb"
+    property color mutedColor: "#93a6c0"
+    property color urgentColor: "#f7768e"
+    property string fontFamily: "monospace"
+    property int radius: 8
+    property int presentationSpacing: 8
+    readonly property color secondaryTextColor: mixColor(surfaceColor, textColor, 0.72)
+    readonly property color accentSoftColor: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
+    // Avoid an onXxx initializer: QML can interpret it as a signal handler
+    // instead of a color binding. Keep the presentation alias for consumers.
+    readonly property color accentForegroundColor: contrastColor(accentColor)
+    readonly property alias onAccentColor: root.accentForegroundColor
     property bool active: visible
+    enabled: active
+    padding: 0
+    font.family: fontFamily
+    font.pixelSize: 12
+    palette.window: backgroundColor
+    palette.windowText: textColor
+    palette.base: surfaceColor
+    palette.alternateBase: surfaceHoverColor
+    palette.text: textColor
+    palette.button: surfaceColor
+    palette.buttonText: textColor
+    palette.highlight: accentColor
+    palette.highlightedText: onAccentColor
+    palette.brightText: urgentColor
+    palette.mid: borderColor
+    palette.dark: borderColor
+    palette.light: surfaceHoverColor
+    palette.placeholderText: secondaryTextColor
+
+    background: Rectangle {
+        color: "transparent"
+    }
+
+    function mixColor(first, second, amount) {
+        const bounded = Math.max(0, Math.min(1, amount))
+        return Qt.rgba(first.r + (second.r - first.r) * bounded, first.g + (second.g - first.g) * bounded, first.b + (second.b - first.b) * bounded, 1)
+    }
+
+    function linearColorChannel(value) {
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
+    }
+
+    function contrastColor(color) {
+        const luminance = 0.2126 * linearColorChannel(color.r) + 0.7152 * linearColorChannel(color.g) + 0.0722 * linearColorChannel(color.b)
+        const blackContrast = (luminance + 0.05) / 0.05
+        const whiteContrast = 1.05 / (luminance + 0.05)
+        return blackContrast >= whiteContrast ? "#000000" : "#ffffff"
+    }
+    // Page changes retain the presentation and its confirmation owners. They
+    // never activate another application or select a replacement device.
+    enum Page {
+        Devices,
+        Device,
+        Applications,
+        Advanced
+    }
+    QtObject {
+        id: navigation
+        property int page: AudioSettingsSection.Devices
+        property string device: ""
+        property string direction: ""
+        property var scrollOffsets: [0, 0, 0, 0]
+        property var focusItems: [null, null, null, null]
+    }
+    readonly property int currentPage: navigation.page
+    readonly property string deviceId: navigation.device
+    readonly property string deviceDirection: navigation.direction
+    readonly property var deviceEndpoint: endpoint(deviceDirection, deviceId)
+    readonly property bool deviceAvailable: deviceEndpoint !== null && backend && backend.audioAvailable
+    readonly property bool backendBusy: !backend || backend.audioBusy
+    property var openPopups: []
+    readonly property var activePopup: openPopups.length > 0 ? openPopups[openPopups.length - 1] : null
+    function popupOpened(popup) {
+        if (popup && openPopups.indexOf(popup) < 0)
+            openPopups = openPopups.concat([popup])
+    }
+    function popupClosed(popup) {
+        openPopups = openPopups.filter(item => item && item !== popup)
+    }
+    readonly property bool navigationBlocked: !active || interactionPending
+    readonly property bool interactionPending: backendBusy || pendingDirection !== "" || pendingMoveStream !== "" || pendingControlTarget !== "" || activePopup !== null || confirmDefault.visible || confirmStreamMove.visible || volumeDialog.visible || muteDialog.visible || processDialog.visible || selectionDialog.visible || backend.audioProcessChoiceOpen || backend.audioSelectionConfirmationOpen
+    readonly property bool canUnload: !loaded
     property bool loaded: false
+
+    // The initial migration deliberately refuses destructive view reload after
+    // activation. A future host must negotiate state transfer, not destroy it.
+    function requestUnload() {
+        return canUnload
+    }
+
+    function endpoint(direction, identity) {
+        const items = direction === "output" ? outputs : direction === "input" ? inputs : []
+        for (let index = 0; index < items.length; ++index) {
+            if (items[index].id === identity)
+                return items[index]
+        }
+        return null
+    }
+
+    function showPage(page) {
+        if (navigationBlocked || !Number.isInteger(page) || page < 0 || page > 3 || (page === AudioSettingsSection.Device && deviceId === ""))
+            return false
+        if (page === currentPage)
+            return true
+        navigation.scrollOffsets[currentPage] = audioScroll.contentItem.contentY
+        navigation.focusItems[currentPage] = root.Window.window ? root.Window.window.activeFocusItem : null
+        navigation.page = page
+        Qt.callLater(function () {
+            if (root.currentPage !== page || root.navigationBlocked)
+                return
+            const viewport = audioScroll.contentItem
+            viewport.contentY = Math.max(0, Math.min(navigation.scrollOffsets[page], viewport.contentHeight - viewport.height))
+            const target = navigation.focusItems[page]
+            if (target && target.visible && target.enabled)
+                target.forceActiveFocus(Qt.TabFocusReason)
+            else
+                pageTitle.forceActiveFocus(Qt.TabFocusReason)
+        })
+        return true
+    }
+
+    function openDevice(direction, identity) {
+        if (navigationBlocked || !endpoint(direction, identity))
+            return false
+        if (deviceId !== identity || deviceDirection !== direction) {
+            navigation.scrollOffsets[AudioSettingsSection.Device] = 0
+            navigation.focusItems[AudioSettingsSection.Device] = null
+        }
+        navigation.device = identity
+        navigation.direction = direction
+        return showPage(AudioSettingsSection.Device)
+    }
+
     property string pendingDirection: ""
     property string pendingDevice: ""
     property string selectedProcessStream: ""
@@ -41,8 +182,13 @@ Item {
     readonly property string goxlrStatus: backend ? backend.audioGoxlrStatus || "Unavailable" : "Unavailable"
     readonly property string goxlrReason: backend ? backend.audioGoxlrReason || "" : ""
     readonly property bool goxlrProviderActive: backend ? backend.audioGoxlrProviderActive : false
+    readonly property bool goxlrPresenceKnown: backend ? backend.audioGoxlrPresenceKnown : false
+    readonly property bool goxlrDevicePresent: backend ? backend.audioGoxlrDevicePresent : false
+    readonly property bool goxlrMutationAvailable: backend ? backend.audioGoxlrMutationAvailable : false
     readonly property bool goxlrTruncated: backend ? backend.audioGoxlrTruncated : false
     readonly property var goxlrDevices: backend ? backend.audioGoxlrDevices || [] : []
+    readonly property bool goxlrReadyDevice: goxlrStatus === "Ready" && goxlrProviderActive && goxlrDevices.length === 1
+    readonly property bool goxlrMutationAllowed: goxlrReadyDevice && goxlrMutationAvailable && !navigationBlocked && currentPage === AudioSettingsSection.Advanced
 
     function activate() {
         if (loaded)
@@ -53,13 +199,15 @@ Item {
     }
 
     function requestDefault(direction, device) {
+        if (!active || backendBusy)
+            return
         pendingDirection = direction
         pendingDevice = device
         confirmDefault.open()
     }
 
     function applyPendingDefault() {
-        if (pendingDirection === "" || pendingDevice === "" || !backend)
+        if (!active || backendBusy || pendingDirection === "" || pendingDevice === "")
             return false
         backend.setAudioDefault(pendingDirection, pendingDevice)
         pendingDirection = ""
@@ -77,6 +225,8 @@ Item {
     }
 
     function requestStreamMove(stream, direction, originalDevice) {
+        if (!active || backendBusy)
+            return
         pendingMoveStream = stream
         pendingMoveDirection = direction
         pendingMoveOriginalDevice = originalDevice
@@ -92,7 +242,7 @@ Item {
     }
 
     function applyPendingStreamMove() {
-        if (pendingMoveStream === "" || pendingMoveOriginalDevice === "" || pendingMoveRequestedDevice === "" || !backend)
+        if (!active || backendBusy || pendingMoveStream === "" || pendingMoveOriginalDevice === "" || pendingMoveRequestedDevice === "")
             return false
         backend.moveAudioStream(pendingMoveStream, pendingMoveOriginalDevice, pendingMoveRequestedDevice)
         clearPendingStreamMove()
@@ -100,6 +250,8 @@ Item {
     }
 
     function requestVolume(target, label, currentVolume) {
+        if (!active || backendBusy)
+            return
         pendingControlTarget = target
         pendingControlLabel = label
         pendingControl = "volume"
@@ -109,6 +261,8 @@ Item {
     }
 
     function requestMute(target, label, currentMuted) {
+        if (!active || backendBusy)
+            return
         pendingControlTarget = target
         pendingControlLabel = label
         pendingControl = "mute"
@@ -128,7 +282,7 @@ Item {
     }
 
     function applyPendingControl() {
-        if (pendingControlTarget === "" || !backend)
+        if (!active || backendBusy || pendingControlTarget === "")
             return false
         if (pendingControl === "volume")
             backend.setAudioVolume(pendingControlTarget, pendingControlRequestedVolume)
@@ -141,45 +295,69 @@ Item {
     }
 
     function chooseProcessRule(direction, device) {
-        if (backend)
+        if (active && !backendBusy)
             backend.chooseAudioProcessRule(direction, device)
     }
 
     function chooseExecutableRule(direction, device) {
-        if (backend)
+        if (active && !backendBusy)
             backend.chooseAudioExecutableRule(direction, device)
     }
 
     function chooseDirectoryRule(direction, device) {
-        if (backend)
+        if (active && !backendBusy)
             backend.chooseAudioDirectoryRule(direction, device)
     }
 
     function removeRouteRule(ruleId) {
-        if (backend)
+        if (active && !backendBusy)
             backend.removeAudioRouteRule(ruleId)
     }
 
     function statusText(statusId) {
         switch (statusId) {
-        case "audio-loaded": return qsTr("Audio devices updated.")
-        case "audio-default-applied": return qsTr("Default Audio device changed and verified.")
-        case "audio-default-unchanged": return qsTr("The selected device was already the default.")
-        case "audio-stream-moved": return qsTr("The active Audio stream moved and was verified.")
-        case "audio-stream-unchanged": return qsTr("The active Audio stream was already on that device.")
-        case "audio-volume-applied": return qsTr("Volume changed and verified.")
-        case "audio-volume-unchanged": return qsTr("The selected Audio item already had that volume.")
-        case "audio-mute-applied": return qsTr("Mute state changed and verified.")
-        case "audio-mute-unchanged": return qsTr("The selected Audio item already had that mute state.")
-        case "audio-selection-confirmation-required": return qsTr("Review the Audio signal-path change before applying it.")
-        case "audio-profile-applied": return qsTr("Audio profile changed and verified in the software model.")
-        case "audio-profile-unchanged": return qsTr("The selected Audio profile was already active.")
-        case "audio-port-applied": return qsTr("Audio port changed and verified in the software model.")
-        case "audio-port-unchanged": return qsTr("The selected Audio port was already active.")
-        case "audio-route-rule-saved": return qsTr("Application Audio rule saved.")
-        case "audio-route-rule-unchanged": return qsTr("The Application Audio rule was already present.")
-        case "audio-route-rule-removed": return qsTr("Application Audio rule removed.")
-        default: return ""
+        case "audio-loaded":
+            return qsTr("Audio devices updated.")
+        case "audio-default-applied":
+            return qsTr("Default Audio device changed and verified.")
+        case "audio-default-unchanged":
+            return qsTr("The selected device was already the default.")
+        case "audio-stream-moved":
+            return qsTr("The active Audio stream moved and was verified.")
+        case "audio-stream-unchanged":
+            return qsTr("The active Audio stream was already on that device.")
+        case "audio-volume-applied":
+            return qsTr("Volume changed and verified.")
+        case "audio-volume-unchanged":
+            return qsTr("The selected Audio item already had that volume.")
+        case "audio-mute-applied":
+            return qsTr("Mute state changed and verified.")
+        case "audio-mute-unchanged":
+            return qsTr("The selected Audio item already had that mute state.")
+        case "audio-selection-confirmation-required":
+            return qsTr("Review the Audio signal-path change before applying it.")
+        case "audio-profile-applied":
+            return qsTr("Audio profile changed and verified in the software model.")
+        case "audio-profile-unchanged":
+            return qsTr("The selected Audio profile was already active.")
+        case "audio-port-applied":
+            return qsTr("Audio port changed and verified in the software model.")
+        case "audio-port-unchanged":
+            return qsTr("The selected Audio port was already active.")
+        case "audio-route-rule-saved":
+            return qsTr("Application Audio rule saved.")
+        case "audio-route-rule-unchanged":
+            return qsTr("The Application Audio rule was already present.")
+        case "audio-route-rule-removed":
+            return qsTr("Application Audio rule removed.")
+        case "audio-goxlr-control-applied":
+            return qsTr("GoXLR provider-model control changed and verified.")
+        case "audio-goxlr-control-unchanged":
+            return qsTr("The GoXLR provider-model control already had that value.")
+        case "audio-goxlr-mixer-opened":
+            return qsTr("The complete GoXLR mixer was opened.")
+        default:
+            return ""
         }
     }
 
@@ -209,10 +387,14 @@ Item {
 
     function goxlrStateText() {
         switch (goxlrStatus) {
-        case "Ready": return qsTr("Ready")
-        case "Inactive": return qsTr("Inactive")
-        case "Failed": return qsTr("Failed")
-        default: return qsTr("Unavailable")
+        case "Ready":
+            return qsTr("Ready")
+        case "Inactive":
+            return qsTr("Inactive")
+        case "Failed":
+            return qsTr("Failed")
+        default:
+            return qsTr("Unavailable")
         }
     }
 
@@ -221,19 +403,17 @@ Item {
             return qsTr("The GoXLR provider is running and reports no devices.")
         if (goxlrStatus === "Ready")
             return qsTr("Devices are projected from the provider profile model, not from hardware readback.")
+        if (goxlrStatus === "Inactive" && goxlrPresenceKnown && goxlrDevicePresent)
+            return qsTr("A GoXLR is connected, but its provider is inactive. Audio Settings did not start it.")
         if (goxlrStatus === "Inactive")
-            return qsTr("The GoXLR provider is not running. Audio Settings did not start it.")
+            return qsTr("The GoXLR provider is inactive. Audio Settings did not start it.")
         if (goxlrStatus === "Failed")
             return qsTr("The GoXLR status response was rejected safely.")
         return qsTr("The GoXLR status adapter is unavailable.")
     }
 
     function goxlrBoundaryText() {
-        return qsTr("Status is read-only. This screen cannot start the provider, change GoXLR hardware, play audio, or claim hardware readback.")
-    }
-
-    function goxlrCapabilityText(supported) {
-        return supported ? qsTr("System output capability reported") : qsTr("System output capability not reported")
+        return qsTr("Opening and refreshing this screen never starts the provider. Each enabled control uses a bounded plan and one acknowledged setter. Values and compensation have provider-profile-model authority; they are not hardware readback or hardware-exact restoration. No playback or capture is started.")
     }
 
     function controlBoundaryText() {
@@ -266,42 +446,79 @@ Item {
 
     function errorText(errorId) {
         switch (errorId) {
-        case "audio-process-unavailable": return qsTr("No eligible active Audio process is available.")
-        case "selection-invalid": return qsTr("The selected Audio item is no longer available.")
-        case "path-invalid": return qsTr("The selected path is invalid.")
-        case "native-dialog-unavailable": return qsTr("The native Audio path chooser is unavailable in this host.")
-        case "timeout": return qsTr("The Audio backend did not respond in time.")
-        case "contract-invalid": return qsTr("The Audio backend returned an invalid contract.")
+        case "audio-process-unavailable":
+            return qsTr("No eligible active Audio process is available.")
+        case "selection-invalid":
+            return qsTr("The selected Audio item is no longer available.")
+        case "path-invalid":
+            return qsTr("The selected path is invalid.")
+        case "native-dialog-unavailable":
+            return qsTr("The native Audio path chooser is unavailable in this host.")
+        case "timeout":
+            return qsTr("The Audio backend did not respond in time.")
+        case "contract-invalid":
+            return qsTr("The Audio backend returned an invalid contract.")
         case "backend-unavailable":
-        case "start-failed": return qsTr("The Audio backend is unavailable.")
+        case "start-failed":
+            return qsTr("The Audio backend is unavailable.")
         case "backend-failed":
         case "default-plan-failed":
         case "default-apply-failed":
         case "route-policy-failed":
         case "broker-status-unavailable":
         case "goxlr-status-unavailable":
-        case "policy-unavailable": return qsTr("The Audio operation failed safely.")
-        case "audio-stream-plan-failed": return qsTr("The active stream could not be planned safely.")
-        case "audio-stream-move-refused": return qsTr("The stream state changed or became unavailable. Nothing was moved.")
-        case "audio-stream-move-restored": return qsTr("The move failed; the exact original device was restored and verified.")
-        case "audio-stream-move-failed": return qsTr("The stream move could not be verified safely.")
-        case "audio-control-plan-failed": return qsTr("The Audio control could not be planned safely.")
-        case "audio-control-refused": return qsTr("The Audio item changed or became unavailable. Nothing was changed.")
-        case "audio-control-restored": return qsTr("The Audio control failed; the exact original value was restored and verified.")
-        case "audio-control-failed": return qsTr("The Audio control outcome could not be verified safely.")
-        case "audio-selection-plan-failed": return qsTr("The Audio profile or port change could not be planned safely.")
-        case "audio-selection-refused": return qsTr("The Audio profile or port state changed. Nothing was applied.")
-        case "audio-selection-restored": return qsTr("The Audio signal-path change failed; the exact original software state was restored and verified.")
-        case "audio-selection-failed": return qsTr("The Audio profile or port outcome could not be verified safely.")
-        case "profile-port-inventory-unavailable": return qsTr("The Audio profile and port inventory is unavailable.")
+        case "policy-unavailable":
+            return qsTr("The Audio operation failed safely.")
+        case "audio-stream-plan-failed":
+            return qsTr("The active stream could not be planned safely.")
+        case "audio-stream-move-refused":
+            return qsTr("The stream state changed or became unavailable. Nothing was moved.")
+        case "audio-stream-move-restored":
+            return qsTr("The move failed; the exact original device was restored and verified.")
+        case "audio-stream-move-failed":
+            return qsTr("The stream move could not be verified safely.")
+        case "audio-control-plan-failed":
+            return qsTr("The Audio control could not be planned safely.")
+        case "audio-control-refused":
+            return qsTr("The Audio item changed or became unavailable. Nothing was changed.")
+        case "audio-control-restored":
+            return qsTr("The Audio control failed; the exact original value was restored and verified.")
+        case "audio-control-failed":
+            return qsTr("The Audio control outcome could not be verified safely.")
+        case "audio-goxlr-selection-invalid":
+            return qsTr("The selected GoXLR control is unavailable or stale.")
+        case "audio-goxlr-control-plan-failed":
+            return qsTr("The GoXLR control could not be planned safely.")
+        case "audio-goxlr-control-refused":
+            return qsTr("The GoXLR provider-model state changed. Nothing was overwritten.")
+        case "audio-goxlr-control-restored":
+            return qsTr("The GoXLR provider-model change failed and was compensated. Hardware restoration is not claimed.")
+        case "audio-goxlr-control-failed":
+            return qsTr("The GoXLR control outcome is uncertain or drifted. Refresh before trying again.")
+        case "audio-goxlr-mixer-unavailable":
+            return qsTr("The complete GoXLR mixer application is unavailable.")
+        case "audio-selection-plan-failed":
+            return qsTr("The Audio profile or port change could not be planned safely.")
+        case "audio-selection-refused":
+            return qsTr("The Audio profile or port state changed. Nothing was applied.")
+        case "audio-selection-restored":
+            return qsTr("The Audio signal-path change failed; the exact original software state was restored and verified.")
+        case "audio-selection-failed":
+            return qsTr("The Audio profile or port outcome could not be verified safely.")
+        case "profile-port-inventory-unavailable":
+            return qsTr("The Audio profile and port inventory is unavailable.")
         case "output-too-large":
-        case "process-crashed": return qsTr("The Audio backend response was rejected.")
-        default: return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
+        case "process-crashed":
+            return qsTr("The Audio backend response was rejected.")
+        default:
+            return errorId === "" ? "" : qsTr("Audio error: %1").arg(errorId)
         }
     }
 
-    onActiveChanged: if (active) activate()
-    Component.onCompleted: if (active) activate()
+    onActiveChanged: if (active)
+        activate()
+    Component.onCompleted: if (active)
+        activate()
 
     Connections {
         target: root.backend
@@ -318,8 +535,9 @@ Item {
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: confirmDefault
+        presentation: root
         title: qsTr("Change default device")
         modal: true
         anchors.centerIn: parent
@@ -331,53 +549,47 @@ Item {
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: selectionDialog
+        presentation: root
+        acceptText: qsTr("Apply change")
         objectName: "audioSelectionDialog"
-        title: root.backend && root.backend.audioSelectionKind === "profile"
-               ? qsTr("Change Audio profile") : qsTr("Change Audio port")
+        title: root.backend && root.backend.audioSelectionKind === "profile" ? qsTr("Change Audio profile") : qsTr("Change Audio port")
         modal: true
         anchors.centerIn: parent
         width: Math.min(Math.max(root.width - 40, 320), 560)
         standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: {
-            const button = standardButton(Dialog.Ok)
-            if (button)
-                button.text = qsTr("Apply change")
-        }
-        onAccepted: if (root.backend) root.backend.confirmAudioSelection()
-        onRejected: if (root.backend) root.backend.cancelAudioSelection()
+        onAccepted: if (root.active && !root.backendBusy)
+            root.backend.confirmAudioSelection()
+        onRejected: if (root.backend)
+            root.backend.cancelAudioSelection()
 
         contentItem: ColumnLayout {
             spacing: 8
             Label {
                 Layout.fillWidth: true
-                text: root.backend
-                      ? root.selectionTargetDisplayLabel(root.backend.audioSelectionTargetLabel || "", root.backend.audioSelectionKind || "")
-                      : ""
+                text: root.backend ? root.selectionTargetDisplayLabel(root.backend.audioSelectionTargetLabel || "", root.backend.audioSelectionKind || "") : ""
                 font.bold: true
                 elide: Text.ElideRight
             }
             Label {
                 Layout.fillWidth: true
-                text: root.backend
-                      ? qsTr("%1 → %2")
-                            .arg(root.selectionDisplayLabel(root.backend.audioSelectionOriginalLabel || "", root.backend.audioSelectionKind || ""))
-                            .arg(root.selectionDisplayLabel(root.backend.audioSelectionRequestedLabel || "", root.backend.audioSelectionKind || ""))
-                      : ""
+                text: root.backend ? qsTr("%1 → %2").arg(root.selectionDisplayLabel(root.backend.audioSelectionOriginalLabel || "", root.backend.audioSelectionKind || "")).arg(root.selectionDisplayLabel(root.backend.audioSelectionRequestedLabel || "", root.backend.audioSelectionKind || "")) : ""
                 wrapMode: Text.WordWrap
             }
             Label {
                 Layout.fillWidth: true
                 text: root.profilePortBoundaryText()
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: confirmStreamMove
+        presentation: root
+        acceptText: qsTr("Move stream")
         title: qsTr("Move this active stream")
         modal: true
         anchors.centerIn: parent
@@ -386,10 +598,8 @@ Item {
         onOpened: {
             streamMoveDevice.currentIndex = -1
             const button = standardButton(Dialog.Ok)
-            if (button) {
-                button.text = qsTr("Move stream")
+            if (button)
                 button.enabled = false
-            }
         }
         onAccepted: root.applyPendingStreamMove()
         onRejected: root.clearPendingStreamMove()
@@ -405,10 +615,11 @@ Item {
                 Layout.fillWidth: true
                 text: qsTr("If verification fails, Synapse restores the exact original device only while it can prove the same stream identity.")
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
-            ComboBox {
+            AudioComboBox {
                 id: streamMoveDevice
+                presentation: root
                 Layout.fillWidth: true
                 model: root.pendingMoveDirection === "playback" ? root.outputs : root.inputs
                 textRole: "label"
@@ -424,8 +635,11 @@ Item {
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: volumeDialog
+        presentation: root
+        acceptText: qsTr("Apply volume")
+        objectName: "audioVolumeDialog"
         title: qsTr("Change volume")
         modal: true
         anchors.centerIn: parent
@@ -434,10 +648,8 @@ Item {
         onOpened: {
             volumeSpin.value = root.pendingControlRequestedVolume
             const button = standardButton(Dialog.Ok)
-            if (button) {
-                button.text = qsTr("Apply volume")
+            if (button)
                 button.enabled = volumeSpin.value !== root.pendingControlOriginalVolume
-            }
         }
         onAccepted: {
             root.pendingControlRequestedVolume = volumeSpin.value
@@ -453,14 +665,20 @@ Item {
                 font.bold: true
                 elide: Text.ElideRight
             }
-            SpinBox {
+            AudioSpinBox {
                 id: volumeSpin
+                presentation: root
+                objectName: "audioVolumeInput"
                 Layout.fillWidth: true
                 from: 0
                 to: 100
                 editable: true
-                textFromValue: function(value, locale) { return Number(value).toLocaleString(locale, "f", 0) + "%" }
-                valueFromText: function(text, locale) { return Number.fromLocaleString(locale, text.replace("%", "")) }
+                textFromValue: function (value, locale) {
+                    return Number(value).toLocaleString(locale, "f", 0) + "%"
+                }
+                valueFromText: function (text, locale) {
+                    return Number.fromLocaleString(locale, text.replace("%", ""))
+                }
                 onValueModified: {
                     root.pendingControlRequestedVolume = value
                     const button = volumeDialog.standardButton(Dialog.Ok)
@@ -472,29 +690,26 @@ Item {
                 Layout.fillWidth: true
                 text: qsTr("Volume is capped at 100% to avoid software amplification.")
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
             Label {
                 Layout.fillWidth: true
                 text: root.controlBoundaryText()
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: muteDialog
+        presentation: root
+        acceptText: root.pendingControlRequestedMuted ? qsTr("Mute") : qsTr("Unmute")
         title: root.pendingControlRequestedMuted ? qsTr("Mute Audio item") : qsTr("Unmute Audio item")
         modal: true
         anchors.centerIn: parent
         width: Math.min(Math.max(root.width - 40, 320), 520)
         standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: {
-            const button = standardButton(Dialog.Ok)
-            if (button)
-                button.text = root.pendingControlRequestedMuted ? qsTr("Mute") : qsTr("Unmute")
-        }
         onAccepted: root.applyPendingControl()
         onRejected: root.clearPendingControl()
 
@@ -508,22 +723,21 @@ Item {
             }
             Label {
                 Layout.fillWidth: true
-                text: root.pendingControlRequestedMuted
-                      ? qsTr("Mute only this selected Audio item?")
-                      : qsTr("Unmute only this selected Audio item?")
+                text: root.pendingControlRequestedMuted ? qsTr("Mute only this selected Audio item?") : qsTr("Unmute only this selected Audio item?")
                 wrapMode: Text.WordWrap
             }
             Label {
                 Layout.fillWidth: true
                 text: root.controlBoundaryText()
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
         }
     }
 
-    Dialog {
+    AudioDialog {
         id: processDialog
+        presentation: root
         title: qsTr("Choose an active Audio process")
         modal: true
         anchors.centerIn: parent
@@ -536,10 +750,11 @@ Item {
                 button.enabled = false
         }
         onAccepted: {
-            if (root.backend && root.selectedProcessStream !== "")
+            if (root.active && !root.backendBusy && root.selectedProcessStream !== "")
                 root.backend.confirmAudioProcessRule(root.selectedProcessStream)
         }
-        onRejected: if (root.backend) root.backend.cancelAudioProcessRule()
+        onRejected: if (root.backend)
+            root.backend.cancelAudioProcessRule()
 
         contentItem: ColumnLayout {
             spacing: 8
@@ -547,7 +762,7 @@ Item {
                 Layout.fillWidth: true
                 text: qsTr("The rule will follow the canonical executable, never the PID.")
                 wrapMode: Text.WordWrap
-                opacity: 0.7
+                color: root.secondaryTextColor
             }
             ScrollView {
                 Layout.fillWidth: true
@@ -582,22 +797,108 @@ Item {
         anchors.fill: parent
         spacing: 12
 
-        Label {
-            text: qsTr("Audio")
-            font.pixelSize: 22
-            font.bold: true
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: root.presentationSpacing
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+
+                Label {
+                    id: pageTitle
+                    textFormat: Text.PlainText
+                    objectName: "audioPresentationTitle"
+                    Layout.fillWidth: true
+                    text: root.currentPage === AudioSettingsSection.Applications ?
+                    //% "Application mixer"
+                    qsTrId("settings.audio.navigation.mixer") : root.currentPage === AudioSettingsSection.Advanced ?
+                    //% "Advanced"
+                    qsTrId("settings.audio.navigation.advanced") : root.currentPage === AudioSettingsSection.Device ? (root.deviceEndpoint ? root.deviceEndpoint.label : qsTr("Unavailable device")) : qsTr("Audio")
+                    Accessible.role: Accessible.Heading
+                    Accessible.name: text
+                    color: root.textColor
+                    font.family: root.fontFamily
+                    font.pixelSize: 22
+                    font.bold: true
+                }
+
+                Label {
+                    objectName: "audioPresentationDescription"
+                    Layout.fillWidth: true
+                    text: root.currentPage === AudioSettingsSection.Devices ?
+                    //% "Choose where sound plays and which microphone is used."
+                    qsTrId("settings.audio.navigation.devices-description") : root.currentPage === AudioSettingsSection.Device ? (root.deviceDirection === "output" ? qsTr("Output") : qsTr("Input")) : root.currentPage === AudioSettingsSection.Applications ?
+                    //% "Adjust active streams without changing saved routing rules."
+                    qsTrId("settings.audio.navigation.mixer-description") :
+                    //% "Saved routing, signal paths and device-specific controls."
+                    qsTrId("settings.audio.navigation.advanced-description")
+                    color: root.secondaryTextColor
+                    font.family: root.fontFamily
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            AudioButton {
+                objectName: "audioRefreshButton"
+                presentation: root
+                text: qsTr("Refresh")
+                emphasized: true
+                enabled: !root.navigationBlocked
+                onClicked: if (enabled)
+                    root.backend.loadAudio()
+            }
         }
 
-        Label {
+        RowLayout {
             Layout.fillWidth: true
-            text: qsTr("Devices and streams are published by the typed backend.")
-            wrapMode: Text.WordWrap
-            opacity: 0.7
+            spacing: root.presentationSpacing
+            AudioButton {
+                presentation: root
+                objectName: "audioNavigateDevices"
+                //% "Devices"
+                text: qsTrId("settings.audio.navigation.devices")
+                emphasized: root.currentPage === AudioSettingsSection.Devices
+                enabled: !root.navigationBlocked
+                onClicked: root.showPage(AudioSettingsSection.Devices)
+            }
+            AudioButton {
+                presentation: root
+                objectName: "audioNavigateMixer"
+                //% "Application mixer"
+                text: qsTrId("settings.audio.navigation.mixer")
+                emphasized: root.currentPage === AudioSettingsSection.Applications
+                enabled: !root.navigationBlocked
+                onClicked: root.showPage(AudioSettingsSection.Applications)
+            }
+            AudioButton {
+                presentation: root
+                objectName: "audioNavigateAdvanced"
+                //% "Advanced"
+                text: qsTrId("settings.audio.navigation.advanced")
+                emphasized: root.currentPage === AudioSettingsSection.Advanced
+                enabled: !root.navigationBlocked
+                onClicked: root.showPage(AudioSettingsSection.Advanced)
+            }
+            Item {
+                Layout.fillWidth: true
+            }
+        }
+
+        AudioButton {
+            presentation: root
+            objectName: "audioDeviceBack"
+            visible: root.currentPage === AudioSettingsSection.Device
+            //% "Back to devices"
+            text: qsTrId("settings.audio.navigation.back")
+            enabled: !root.navigationBlocked
+            onClicked: root.showPage(AudioSettingsSection.Devices)
         }
 
         BusyIndicator {
             visible: root.backend ? root.backend.audioBusy : false
             running: visible
+            palette.highlight: root.accentColor
             Layout.alignment: Qt.AlignHCenter
         }
 
@@ -605,7 +906,7 @@ Item {
             Layout.fillWidth: true
             visible: root.backend && root.statusText(root.backend.audioStatusId || "") !== ""
             text: root.backend ? root.statusText(root.backend.audioStatusId || "") : ""
-            color: palette.highlight
+            color: root.accentColor
             wrapMode: Text.WordWrap
         }
 
@@ -613,7 +914,7 @@ Item {
             Layout.fillWidth: true
             visible: root.backend && root.errorText(root.backend.audioErrorId || "") !== ""
             text: root.backend ? root.errorText(root.backend.audioErrorId || "") : ""
-            color: palette.brightText
+            color: root.urgentColor
             wrapMode: Text.WordWrap
         }
 
@@ -625,6 +926,8 @@ Item {
         }
 
         ScrollView {
+            id: audioScroll
+            objectName: "audioSettingsContent"
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.backend ? root.backend.audioAvailable : false
@@ -640,438 +943,52 @@ Item {
                     Layout.fillWidth: true
                     text: root.controlBoundaryText()
                     wrapMode: Text.WordWrap
-                    opacity: 0.7
+                    color: root.secondaryTextColor
                 }
 
-                Label { text: qsTr("GoXLR provider"); font.bold: true }
-                Frame {
+                AudioDeviceDetail {
+                    section: root
                     Layout.fillWidth: true
-                    RowLayout {
-                        anchors.fill: parent
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("Read-only provider status")
-                            font.bold: true
-                        }
-                        Label {
-                            text: root.goxlrStateText()
-                            color: root.goxlrProviderActive ? palette.highlight : palette.text
-                        }
-                    }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: root.goxlrDetailText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: root.goxlrBoundaryText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
-                }
-                Repeater {
-                    model: root.goxlrDevices
-                    delegate: Frame {
-                        id: goxlrRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        RowLayout {
-                            anchors.fill: parent
-                            Label {
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                text: goxlrRow.modelData.model
-                                elide: Text.ElideRight
-                            }
-                            Label {
-                                text: root.goxlrCapabilityText(goxlrRow.modelData.systemOutputSupported)
-                                opacity: 0.7
-                            }
-                        }
-                    }
-                }
-                Label {
-                    visible: root.goxlrTruncated
-                    text: qsTr("Additional provider devices were omitted by the bounded status contract.")
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
+                    visible: root.currentPage === AudioSettingsSection.Device
                 }
 
-                Label { text: qsTr("Outputs"); font.bold: true }
-                Repeater {
-                    model: root.outputs
-                    delegate: Frame {
-                        id: outputRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        RowLayout {
-                            anchors.fill: parent
-                            Label {
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                text: outputRow.modelData.label
-                                elide: Text.ElideRight
-                            }
-                            Label { text: outputRow.modelData.muted ? qsTr("Muted") : outputRow.modelData.volumePercent + "%" }
-                            Button {
-                                text: qsTr("Level…")
-                                enabled: outputRow.modelData.levelControlAvailable !== false && !root.backend.audioBusy
-                                onClicked: outputLevelMenu.open()
-                                Menu {
-                                    id: outputLevelMenu
-                                    MenuItem {
-                                        text: qsTr("Volume…")
-                                        onTriggered: root.requestVolume(outputRow.modelData.id, outputRow.modelData.label, outputRow.modelData.volumePercent)
-                                    }
-                                    MenuItem {
-                                        text: outputRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
-                                        onTriggered: root.requestMute(outputRow.modelData.id, outputRow.modelData.label, outputRow.modelData.muted)
-                                    }
-                                }
-                            }
-                            Button {
-                                text: outputRow.modelData.default ? qsTr("Default") : qsTr("Set")
-                                enabled: !outputRow.modelData.default && !root.backend.audioBusy
-                                onClicked: root.requestDefault("output", outputRow.modelData.id)
-                            }
-                            Button {
-                                text: qsTr("Route…")
-                                enabled: !root.backend.audioBusy
-                                onClicked: outputRouteMenu.open()
-                                Menu {
-                                    id: outputRouteMenu
-                                    MenuItem {
-                                        text: qsTr("Active process…")
-                                        onTriggered: root.chooseProcessRule("output", outputRow.modelData.id)
-                                    }
-                                    MenuItem {
-                                        text: qsTr("Executable…")
-                                        onTriggered: root.chooseExecutableRule("output", outputRow.modelData.id)
-                                    }
-                                    MenuItem {
-                                        text: qsTr("Directory…")
-                                        onTriggered: root.chooseDirectoryRule("output", outputRow.modelData.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                AudioAdvancedGoXLR {
+                    section: root
+                    Layout.fillWidth: true
+                    visible: root.currentPage === AudioSettingsSection.Advanced
                 }
 
-                Label { text: qsTr("Inputs"); font.bold: true }
-                Repeater {
-                    model: root.inputs
-                    delegate: Frame {
-                        id: inputRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        RowLayout {
-                            anchors.fill: parent
-                            Label {
-                                Layout.fillWidth: true
-                                Layout.minimumWidth: 0
-                                text: inputRow.modelData.label
-                                elide: Text.ElideRight
-                            }
-                            Label { text: inputRow.modelData.muted ? qsTr("Muted") : inputRow.modelData.volumePercent + "%" }
-                            Button {
-                                text: qsTr("Level…")
-                                enabled: inputRow.modelData.levelControlAvailable !== false && !root.backend.audioBusy
-                                onClicked: inputLevelMenu.open()
-                                Menu {
-                                    id: inputLevelMenu
-                                    MenuItem {
-                                        text: qsTr("Volume…")
-                                        onTriggered: root.requestVolume(inputRow.modelData.id, inputRow.modelData.label, inputRow.modelData.volumePercent)
-                                    }
-                                    MenuItem {
-                                        text: inputRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
-                                        onTriggered: root.requestMute(inputRow.modelData.id, inputRow.modelData.label, inputRow.modelData.muted)
-                                    }
-                                }
-                            }
-                            Button {
-                                text: inputRow.modelData.default ? qsTr("Default") : qsTr("Set")
-                                enabled: !inputRow.modelData.default && !root.backend.audioBusy
-                                onClicked: root.requestDefault("input", inputRow.modelData.id)
-                            }
-                            Button {
-                                text: qsTr("Route…")
-                                enabled: !root.backend.audioBusy
-                                onClicked: inputRouteMenu.open()
-                                Menu {
-                                    id: inputRouteMenu
-                                    MenuItem {
-                                        text: qsTr("Active process…")
-                                        onTriggered: root.chooseProcessRule("input", inputRow.modelData.id)
-                                    }
-                                    MenuItem {
-                                        text: qsTr("Executable…")
-                                        onTriggered: root.chooseExecutableRule("input", inputRow.modelData.id)
-                                    }
-                                    MenuItem {
-                                        text: qsTr("Directory…")
-                                        onTriggered: root.chooseDirectoryRule("input", inputRow.modelData.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                AudioDeviceList {
+                    section: root
+                    Layout.fillWidth: true
+                    visible: root.currentPage === AudioSettingsSection.Devices || root.currentPage === AudioSettingsSection.Advanced
                 }
 
-                Label { text: qsTr("Application streams"); font.bold: true }
-                Label {
-                    visible: root.streams.length === 0
-                    text: qsTr("No active streams")
-                    opacity: 0.7
-                }
-                Repeater {
-                    model: root.streams
-                    delegate: Frame {
-                        id: streamRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        RowLayout {
-                            anchors.fill: parent
-                            Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: streamRow.modelData.label; elide: Text.ElideRight }
-                            Label { text: streamRow.modelData.direction === "playback" ? qsTr("Playback") : qsTr("Recording") }
-                            Label {
-                                Layout.maximumWidth: 180
-                                text: root.endpointLabel(streamRow.modelData.target)
-                                elide: Text.ElideRight
-                            }
-                            Label { text: streamRow.modelData.muted ? qsTr("Muted") : streamRow.modelData.volumePercent + "%" }
-                            Button {
-                                text: qsTr("Level…")
-                                enabled: streamRow.modelData.levelControlAvailable && !root.backend.audioBusy
-                                onClicked: streamLevelMenu.open()
-                                Menu {
-                                    id: streamLevelMenu
-                                    MenuItem {
-                                        text: qsTr("Volume…")
-                                        onTriggered: root.requestVolume(streamRow.modelData.id, streamRow.modelData.label, streamRow.modelData.volumePercent)
-                                    }
-                                    MenuItem {
-                                        text: streamRow.modelData.muted ? qsTr("Unmute…") : qsTr("Mute…")
-                                        onTriggered: root.requestMute(streamRow.modelData.id, streamRow.modelData.label, streamRow.modelData.muted)
-                                    }
-                                }
-                            }
-                            Button {
-                                text: qsTr("Move…")
-                                enabled: streamRow.modelData.moveAvailable && !root.backend.audioBusy
-                                onClicked: root.requestStreamMove(streamRow.modelData.id, streamRow.modelData.direction, streamRow.modelData.target)
-                            }
-                        }
-                    }
+                AudioButton {
+                    presentation: root
+                    text: qsTr("Complete mixer…")
+                    visible: root.currentPage === AudioSettingsSection.Devices
+                    enabled: !root.navigationBlocked
+                    onClicked: if (enabled)
+                        root.backend.openGoxlrMixer()
                 }
 
-                Label { text: qsTr("Per-application routing"); font.bold: true }
-                Frame {
+                AudioApplicationMixer {
+                    section: root
                     Layout.fillWidth: true
-                    RowLayout {
-                        anchors.fill: parent
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("New-stream Audio broker")
-                            font.bold: true
-                        }
-                        Label {
-                            text: root.brokerStateText()
-                            color: root.routeBrokerActive ? palette.highlight : palette.text
-                        }
-                    }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: root.brokerDetailText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: root.existingStreamBoundaryText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
-                }
-                Label {
-                    visible: root.routeRules.length === 0
-                    text: qsTr("No process or path rules")
-                    opacity: 0.7
-                }
-                Repeater {
-                    model: root.routeRules
-                    delegate: Frame {
-                        id: routeRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        RowLayout {
-                            anchors.fill: parent
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: routeRow.modelData.displayPath
-                                    elide: Text.ElideMiddle
-                                }
-                                Label {
-                                    text: (routeRow.modelData.matchType === "executable" ? qsTr("Executable") : qsTr("Directory"))
-                                          + " · " + (routeRow.modelData.direction === "output" ? qsTr("Output") : qsTr("Input"))
-                                    opacity: 0.7
-                                }
-                            }
-                            Label {
-                                text: routeRow.modelData.deviceAvailable === false ? qsTr("Unavailable device") : routeRow.modelData.deviceLabel
-                                elide: Text.ElideRight
-                            }
-                            Button {
-                                text: qsTr("Remove")
-                                enabled: !root.backend.audioBusy
-                                onClicked: root.removeRouteRule(routeRow.modelData.id)
-                            }
-                        }
-                    }
+                    visible: root.currentPage === AudioSettingsSection.Applications
                 }
 
-                Label { text: qsTr("Profiles and ports"); font.bold: true }
-                Label {
+                AudioAdvancedRouting {
+                    section: root
                     Layout.fillWidth: true
-                    text: root.profilePortBoundaryText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
+                    visible: root.currentPage === AudioSettingsSection.Advanced
                 }
-                Label {
+
+                AudioPortList {
+                    section: root
                     Layout.fillWidth: true
-                    visible: !root.profilePortAvailable
-                    text: root.profilePortUnavailableText()
-                    wrapMode: Text.WordWrap
-                    opacity: 0.7
-                }
-                Repeater {
-                    model: root.profileCards
-                    delegate: Frame {
-                        id: profileCardRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        ColumnLayout {
-                            anchors.fill: parent
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    text: root.selectionTargetDisplayLabel(profileCardRow.modelData.label || "", "profile")
-                                    font.bold: true
-                                    elide: Text.ElideRight
-                                }
-                                Label {
-                                    text: profileCardRow.modelData.activeProfile
-                                          ? root.selectionDisplayLabel(profileCardRow.modelData.activeProfileLabel || "", "profile")
-                                          : qsTr("No active profile")
-                                    opacity: 0.7
-                                }
-                            }
-                            ComboBox {
-                                id: profileChooser
-                                objectName: "audioProfileChooser-" + profileCardRow.modelData.id
-                                Layout.fillWidth: true
-                                model: profileCardRow.modelData.profiles || []
-                                textRole: "label"
-                                valueRole: "id"
-                                enabled: profileCardRow.modelData.mutationAvailable && !root.backend.audioBusy && !root.backend.audioSelectionConfirmationOpen
-                                function activeIndex() {
-                                    const options = profileCardRow.modelData.profiles || []
-                                    for (let index = 0; index < options.length; ++index) {
-                                        if (options[index].id === profileCardRow.modelData.activeProfile)
-                                            return index
-                                    }
-                                    return -1
-                                }
-                                currentIndex: activeIndex()
-                                displayText: currentIndex >= 0 && model[currentIndex]
-                                             ? root.selectionDisplayLabel(model[currentIndex].label || "", "profile")
-                                             : qsTr("No active profile")
-                                delegate: ItemDelegate {
-                                    required property var modelData
-                                    width: profileChooser.width
-                                    text: root.selectionDisplayLabel(modelData.label || "", "profile")
-                                    enabled: modelData.availability !== "unavailable"
-                                }
-                                onActivated: function(index) {
-                                    const option = model[index]
-                                    currentIndex = Qt.binding(function() { return profileChooser.activeIndex() })
-                                    if (root.backend && option && option.availability !== "unavailable" && option.id !== profileCardRow.modelData.activeProfile)
-                                        root.backend.planAudioProfile(profileCardRow.modelData.id, option.id)
-                                }
-                            }
-                        }
-                    }
-                }
-                Repeater {
-                    model: root.portEndpoints
-                    delegate: Frame {
-                        id: portEndpointRow
-                        required property var modelData
-                        Layout.fillWidth: true
-                        ColumnLayout {
-                            anchors.fill: parent
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 0
-                                    text: root.selectionTargetDisplayLabel(portEndpointRow.modelData.label || "", "port")
-                                    font.bold: true
-                                    elide: Text.ElideRight
-                                }
-                                Label {
-                                    text: portEndpointRow.modelData.direction === "output" ? qsTr("Output port") : qsTr("Input port")
-                                    opacity: 0.7
-                                }
-                                Label {
-                                    text: portEndpointRow.modelData.activePort
-                                          ? root.selectionDisplayLabel(portEndpointRow.modelData.activePortLabel || "", "port")
-                                          : qsTr("No active port")
-                                    opacity: 0.7
-                                }
-                            }
-                            ComboBox {
-                                id: portChooser
-                                objectName: "audioPortChooser-" + portEndpointRow.modelData.id
-                                Layout.fillWidth: true
-                                model: portEndpointRow.modelData.ports || []
-                                textRole: "label"
-                                valueRole: "id"
-                                enabled: portEndpointRow.modelData.mutationAvailable && !root.backend.audioBusy && !root.backend.audioSelectionConfirmationOpen
-                                function activeIndex() {
-                                    const options = portEndpointRow.modelData.ports || []
-                                    for (let index = 0; index < options.length; ++index) {
-                                        if (options[index].id === portEndpointRow.modelData.activePort)
-                                            return index
-                                    }
-                                    return -1
-                                }
-                                currentIndex: activeIndex()
-                                displayText: currentIndex >= 0 && model[currentIndex]
-                                             ? root.selectionDisplayLabel(model[currentIndex].label || "", "port")
-                                             : qsTr("No active port")
-                                delegate: ItemDelegate {
-                                    required property var modelData
-                                    width: portChooser.width
-                                    text: root.selectionDisplayLabel(modelData.label || "", "port")
-                                    enabled: modelData.availability !== "unavailable"
-                                }
-                                onActivated: function(index) {
-                                    const option = model[index]
-                                    currentIndex = Qt.binding(function() { return portChooser.activeIndex() })
-                                    if (root.backend && option && option.availability !== "unavailable" && option.id !== portEndpointRow.modelData.activePort)
-                                        root.backend.planAudioPort(portEndpointRow.modelData.direction, portEndpointRow.modelData.id, option.id)
-                                }
-                            }
-                        }
-                    }
+                    visible: root.currentPage === AudioSettingsSection.Advanced || root.currentPage === AudioSettingsSection.Device
                 }
             }
         }

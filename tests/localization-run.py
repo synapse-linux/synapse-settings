@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Validate the pinned Synapse GUI locale catalogue inventory.
 
 The inventory mirrors synapse.i18n.locales/v1 at CachyOS/cachyos-calamares
@@ -35,8 +35,9 @@ def text(element: ET.Element | None) -> str:
     return "" if element is None else "".join(element.itertext())
 
 
-def active_messages(root: ET.Element) -> dict[tuple[str, str, str, str], ET.Element]:
-    messages: dict[tuple[str, str, str, str], ET.Element] = {}
+def active_messages(root: ET.Element) -> dict[tuple[str, str, str, str, str], ET.Element]:
+    messages: dict[tuple[str, str, str, str, str], ET.Element] = {}
+    identities: set[str] = set()
     for context in root.findall("context"):
         context_name = text(context.find("name"))
         for message in context.findall("message"):
@@ -51,7 +52,12 @@ def active_messages(root: ET.Element) -> dict[tuple[str, str, str, str], ET.Elem
                 text(message.find("source")),
                 text(message.find("comment")),
                 message.get("numerus", "no"),
+                message.get("id", ""),
             )
+            if key[4]:
+                if key[4] in identities:
+                    raise ValueError(f"duplicate translation ID {key[4]!r}")
+                identities.add(key[4])
             if key in messages:
                 raise ValueError(f"duplicate active message {key!r}")
             messages[key] = message
@@ -74,7 +80,7 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def extracted_source_keys(root: Path) -> set[tuple[str, str, str, str]]:
+def extracted_source_keys(root: Path) -> set[tuple[str, str, str, str, str]]:
     sources = sorted((root / "gui").glob("*.cpp"))
     sources.extend(sorted((root / "gui" / "qml").glob("*.qml")))
     lupdate = os.environ.get("LUPDATE6", "lupdate6")
@@ -144,8 +150,8 @@ def main() -> int:
         source_messages = active_messages(parsed["en_US"])
     except ValueError as error:
         fail(f"en_US: {error}")
-    if len(source_messages) != 133:
-        fail(f"en_US: expected 133 active messages, found {len(source_messages)}")
+    if len(source_messages) != 157:
+        fail(f"en_US: expected 157 active messages, found {len(source_messages)}")
     try:
         if extracted_source_keys(root) != set(source_messages):
             fail("en_US catalogue differs from current lupdate6 source extraction")

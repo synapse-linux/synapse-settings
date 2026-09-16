@@ -1,7 +1,22 @@
+# SPDX-License-Identifier: MIT
 module Synapse.Settings.Audio
 plugin synapse_settings_audio_qml
 classname SynapseSettingsAudioPlugin
 typeinfo synapse-settings-audio.qmltypes
 AudioSettings 1.0 AudioSettings.qml
 AudioSettingsSection 1.0 AudioSettingsSection.qml
+internal AudioDeviceDetail AudioDeviceDetail.qml
+internal AudioDeviceList AudioDeviceList.qml
+internal AudioApplicationMixer AudioApplicationMixer.qml
+internal AudioAdvancedGoXLR AudioAdvancedGoXLR.qml
+internal AudioAdvancedRouting AudioAdvancedRouting.qml
+internal AudioPortList AudioPortList.qml
 AudioShellHost 1.0 AudioShellHost.qml
+AudioPopupHost 1.0 AudioPopupHost.qml
+AudioButton 1.0 AudioButton.qml
+AudioCard 1.0 AudioCard.qml
+AudioComboBox 1.0 AudioComboBox.qml
+AudioSectionHeading 1.0 AudioSectionHeading.qml
+AudioSlider 1.0 AudioSlider.qml
+AudioDialog 1.0 AudioDialog.qml
+AudioSpinBox 1.0 AudioSpinBox.qml

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #include "audio_qml_plugin.h"
 
 #include "audio_adapter.h"

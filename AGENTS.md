@@ -1,5 +1,6 @@
 # Synapse Settings agent contract
 
+- All first-party Synapse Settings source is MIT-licensed; preserve separate dependency and attribution notices and never relabel third-party material.
 - The authoritative settings backend is bounded C11 and works headlessly.
 - QML is presentation-only: it cannot parse raw JSON, inspect `/proc`, resolve
   paths, construct commands, inject environments, or mutate PipeWire directly.
@@ -57,16 +58,30 @@
   playback/capture, change defaults or policy, prove audibility, claim hardware
   readback or claim exact hardware rollback. Keep raw names, acknowledgements,
   cohorts and setter construction out of Qt projections and QML.
-- GoXLR presence/status is read-only. Invoke only fixed production
+- GoXLR status inspection is read-only. Invoke only fixed production
   `/usr/bin/synapse-goxlr provider-status --format json`, bound execution and
-  output, strictly validate the complete provider contract, then discard raw
-  profile values. A missing or inactive provider is typed state, not authority
-  to start it.
-- The GoXLR Settings contract must fix provider-profile authority, hardware
-  readback, exact rollback and mutation claims honestly. QML receives no device
-  token, profile value, command, plan or apply method.
+  output, and strictly validate the complete provider contract. A missing or
+  inactive provider is typed state, not authority to start it. A separate
+  read-only inventory probe may establish attached-device presence after an
+  inactive status, but must not activate the provider.
+- Popup GoXLR mutation is a separate mediated boundary. QML may receive only one
+  bounded presentation projection with four assigned faders, cough mode/state,
+  output levels and independent capability booleans. It receives no device
+  token, generation, cohort, acknowledgement, raw identity, command or process
+  metadata. The C11 core alone plans and applies one control through
+  `synapse-settings/audio-goxlr-popup/v1`, translating internally to the exact
+  provider acknowledgement, revalidating twice, issuing one setter, and
+  refreshing status after every outcome.
+- The GoXLR Settings contract must state provider-profile-model authority,
+  hardware readback and rollback limits honestly. Never retry an uncertain
+  write, overwrite a freshly observed third state, or describe provider-model
+  compensation as hardware-exact restoration. Opening or refreshing Settings
+  must never start the provider.
 - Keep capture, Bluetooth pairing, safe playback tests, GoXLR control and profile
-  mutation behind independent consent and capability gates.
+  mutation behind independent consent and capability gates. The popup may
+  enable a control only for Ready state, an active provider, exactly one typed
+  ready device, global mutation availability and that control's exact
+  independent capability.
 - Composition lock data and pacman state remain read-only inputs. Docker
   inspection remains optional, bounded and non-mutating.
 - Build against released `libsynapse-core`; packaging lives only in
